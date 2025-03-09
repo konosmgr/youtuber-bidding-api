@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .button {
+        background-color: #3b82f6;
+        color: white;
+        padding: 10px 20px;
+        text-decoration: none;
+        border-radius: 5px;
+        display: inline-block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Bid Confirmation</h2>
+      <p>Hello {{ bidder_name }},</p>
+      <p>
+        Your bid of ${{ bid_amount }} for {{ item_title }} has been successfully
+        placed.
+      </p>
+      <p>You can view the auction here:</p>
+      <p><a href="{{ item_url }}" class="button">View Auction</a></p>
+      <p>We'll notify you if someone outbids you.</p>
+      <p>Best regards,<br />Alaska Auctions</p>
+    </div>
+  </body>
+</html>

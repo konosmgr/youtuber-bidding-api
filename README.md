@@ -1,1 +1,1 @@
-# youtuber-bidding-api
+# api-youtuber-bidding

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .button {
+        background-color: #3b82f6;
+        color: white;
+        padding: 10px 20px;
+        text-decoration: none;
+        border-radius: 5px;
+        display: inline-block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>You've Been Outbid!</h2>
+      <p>Hello {{ bidder_name }},</p>
+      <p>
+        Someone has placed a new bid of ${{ new_bid_amount }} on {{ item_title
+        }}.
+      </p>
+      <p>Don't let it slip away! Place a new bid now:</p>
+      <p><a href="{{ item_url }}" class="button">Place New Bid</a></p>
+      <p>Best regards,<br />Alaska Auctions</p>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,17 @@
+name: youtuber-bidding-api
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/app
+    env_file:
+      - ../env/.env.dev
+    ports:
+      - "8000:8000"
+    networks:
+      - youtuber-bidding
+networks:
+  youtuber-bidding:
+    external: true

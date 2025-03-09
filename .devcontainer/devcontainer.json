@@ -1,0 +1,52 @@
+{
+  "name": "Youtuber Bidding API",
+  "dockerComposeFile": [
+    "./docker-compose.yml"
+  ],
+  "service": "api",
+  "workspaceFolder": "/app",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.black-formatter",
+        "ms-python.isort",
+        "ms-python.pylint",
+        "batisteo.vscode-django",
+        "eamodio.gitlens",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.analysis.extraPaths": [
+          "/app"
+        ],
+        "python.analysis.typeCheckingMode": "basic",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.linting.pylintPath": "pylint",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.formatOnSave": true,
+          "editor.defaultFormatter": "ms-python.black-formatter",
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
+        },
+        "black-formatter.args": [
+          "--line-length=100"
+        ],
+        "isort.args": [
+          "--profile=black",
+          "--line-length=100"
+        ],
+        "pylint.args": [
+          "--load-plugins=pylint_django"
+        ]
+      }
+    }
+  },
+  "remoteUser": "root",
+  "postCreateCommand": "poetry install --no-interaction"
+}

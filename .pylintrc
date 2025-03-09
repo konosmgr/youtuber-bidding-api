@@ -1,0 +1,101 @@
+[MASTER]
+load-plugins=pylint_django
+django-settings-module=core.settings
+
+# Files or directories to be skipped
+ignore=migrations,settings.py,manage.py,.git,__pycache__,frontend
+
+# Python code to execute
+init-hook="from pylint.config import find_pylintrc; import os, sys; sys.path.append(os.path.dirname(find_pylintrc()))"
+
+# Use multiple processes to speed up Pylint
+jobs=4
+
+[FORMAT]
+# Maximum number of characters on a single line
+max-line-length=88
+
+# Number of spaces of indent required inside a hanging or continued line
+indent-after-paren=4
+
+[MESSAGES CONTROL]
+# Disable specific warnings
+disable=
+    C0111, # missing-docstring
+    C0103, # invalid-name
+    C0330, # bad-continuation
+    C0326, # bad-whitespace
+    R0903, # too-few-public-methods
+    W0511, # TODO warning
+    W0703, # broad-except
+    R0913, # too-many-arguments
+    R0914, # too-many-locals
+    W0221, # arguments-differ
+    C0415, # import-outside-toplevel
+    W0621, # redefined-outer-name
+    R0801, # duplicate-code
+    W0212, # protected-access
+    W0707  # raise-missing-from
+
+[BASIC]
+# Regular expression which should only match function or class names
+function-rgx=[a-z_][a-z0-9_]{2,50}$
+class-rgx=[A-Z_][a-zA-Z0-9_]+$
+
+# Good variable names which should always be accepted
+good-names=i,j,k,ex,Run,_,pk,id,up,urlpatterns,app_name,application
+
+[DJANGO]
+django-settings-module=core.settings
+
+[DESIGN]
+# Maximum number of arguments for function / method
+max-args=8
+
+# Maximum number of locals for function / method body
+max-locals=15
+
+# Maximum number of return / yield for function / method body
+max-returns=6
+
+# Maximum number of branch for function / method body
+max-branches=12
+
+# Maximum number of statements in function / method body
+max-statements=50
+
+# Maximum number of parents for a class (see R0901).
+max-parents=7
+
+# Maximum number of attributes for a class (see R0902).
+max-attributes=10
+
+# Minimum number of public methods for a class (see R0903).
+min-public-methods=1
+
+# Maximum number of public methods for a class (see R0904).
+max-public-methods=20
+
+[SIMILARITIES]
+# Minimum lines number of a similarity
+min-similarity-lines=8
+
+# Ignore imports when computing similarities
+ignore-imports=yes
+
+# Ignore function signatures when computing similarities
+ignore-signatures=yes
+
+[TYPECHECK]
+# List of module names for which member attributes should not be checked
+ignored-modules=numpy,tensorflow,cv2,torch
+
+# List of classes names for which member attributes should not be checked
+ignored-classes=SQLObject,WSGIRequest,Request
+
+# List of members which are set dynamically and missed by pylint inference system
+generated-members=objects,DoesNotExist,id,pk,_meta,_state
+
+[MISCELLANEOUS]
+# List of note tags to take into consideration
+notes=FIXME,XXX,TODO,HACK
