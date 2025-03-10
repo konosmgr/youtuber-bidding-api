@@ -8,9 +8,7 @@ class ItemImageInline(admin.TabularInline):
 
 class BidInline(admin.TabularInline):
     model = Bid
-    # Removed readonly_fields to allow editing
     extra = 1
-    # Enabled adding and deleting
     can_delete = True
     can_add = True
 
@@ -19,7 +17,7 @@ class ItemAdmin(admin.ModelAdmin):
     list_display = ("title", "category", "current_price", "end_date", "is_active", "get_winner")
     list_filter = ("category", "is_active", "winner_notified", "end_date")
     search_fields = ("title", "description")
-    readonly_fields = ("get_winner_info",)  # Removed "current_price" to make it editable
+    readonly_fields = ("get_winner_info",)
     inlines = [ItemImageInline, BidInline]
     fieldsets = (
         ("Basic Information", {"fields": ("title", "category", "description", "youtube_url")}),
@@ -55,19 +53,8 @@ class ItemAdmin(admin.ModelAdmin):
         return "No winner information available"
     get_winner_info.short_description = "Winner Status"
     
-    # Add actions to manage winners
-    actions = ["mark_winners", "contact_winners"]
-    
-    def mark_winners(self, request, queryset):
-        updated = 0
-        for item in queryset:
-            if item.end_date <= timezone.now() and not item.winner and item.bids.exists():
-                highest_bid = item.bids.order_by('-amount').first()
-                item.winner = highest_bid.user
-                item.save()
-                updated += 1
-        self.message_user(request, f"Marked {updated} items with winners")
-    mark_winners.short_description = "Mark highest bidders as winners"
+    # Only keeping contact_winners action
+    actions = ["contact_winners"]
     
     def contact_winners(self, request, queryset):
         winners_contacted = 0
@@ -141,14 +128,10 @@ class BidAdmin(admin.ModelAdmin):
     list_filter = ("created_at", "item")
     search_fields = ("user__email", "user__username", "item__title")
     
-    # Removed readonly_fields to make all fields editable
-    
     def get_username(self, obj):
         return obj.user.username if obj.user else "Unknown"
     get_username.short_description = 'User'
     get_username.admin_order_field = 'user__username'
-    
-    # Removed has_add_permission and has_delete_permission methods to enable those actions
 
 
 @admin.register(User)

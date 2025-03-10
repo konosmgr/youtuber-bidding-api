@@ -35,6 +35,9 @@ starkbank-ecdsa = "^2.2.0"
 django-ses = "^4.4.0"
 django-csp = "^3.7"
 psycopg2-binary = "^2.9.9"
+celery = "^5.4.0"
+django-celery-beat = "^2.7.0"
+redis = "^5.0.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.1"

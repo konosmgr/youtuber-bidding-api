@@ -10,15 +10,12 @@ ENV PYTHONFAULTHANDLER=1 \
     POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=false \
     POETRY_VERSION=1.7.1 \
-    POETRY_HOME="/opt/poetry" \
-    DJANGO_ENVIRONMENT=dev \
-    PYTHONPATH=/app \
-    PATH="/opt/poetry/bin:/usr/local/bin:$PATH"
+    POETRY_HOME="/opt/poetry"
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies and Poetry
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     postgresql-client \
     gcc \
@@ -26,8 +23,12 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     curl \
     git \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -sSL https://install.python-poetry.org | POETRY_HOME=/opt/poetry python3 -
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry - with explicit path setting afterward
+RUN curl -sSL https://install.python-poetry.org | python3 - \
+    && ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry \
+    && poetry --version
 
 # Copy poetry configuration files
 COPY pyproject.toml poetry.lock* /app/

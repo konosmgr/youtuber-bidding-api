@@ -35,6 +35,7 @@ venv/
 .venv
 env.bak/
 venv.bak/
+.env.dev
 
 # IDE specific files
 .idea/

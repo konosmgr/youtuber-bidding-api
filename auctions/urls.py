@@ -29,6 +29,7 @@ urlpatterns = [
     path("admin/recent-winners/", views.recent_winners, name="admin_recent_winners"),
     path("admin/user-won-items/<int:user_id>/", views.user_won_items, name="user_won_items"),
     path("admin/winner-ids/", views.winner_ids, name="winner_ids"),
-    path("admin/mark_winners/", views.mark_winners, name="mark_winners"),
+    # Keep only the dropdown winner assignment endpoint
+    path("admin/mark_winners/", views.mark_winners, name="mark_winners"),   
     path("admin/contact_winners/", views.contact_winners, name="contact_winners"),
 ]

@@ -1,8 +1,3 @@
-import os
+from .celery import app as celery_app
 
-environment = os.getenv("DJANGO_ENVIRONMENT", "dev")
-
-if environment == "production" or environment == "prod":
-    from .prod import *
-else:
-    from .dev import *
+__all__ = ('celery_app',)

@@ -1,12 +1,13 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, List
-
-from django.contrib.auth.models import AbstractUser, UserManager
-from django.contrib.auth.password_validation import validate_password
-from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models  # added the bellow for user login and auth
 from django.utils import timezone
+from django.core.exceptions import ValidationError
+from typing import List, TYPE_CHECKING
+from django.db import models                            #added the bellow for user login and auth
+from django.contrib.auth.models import AbstractUser, UserManager      
+from django.utils import timezone
+from django.contrib.auth.password_validation import validate_password
+
 
 if TYPE_CHECKING:
     from django.db.models.manager import RelatedManager
@@ -14,84 +15,82 @@ if TYPE_CHECKING:
 
 class CustomUserManager(UserManager):
     """Custom user manager that applies password validation during user creation"""
-
+    
     def _create_user(self, username, email, password, **extra_fields):
         """
         Create and save a user with the given username, email, and password.
         Apply password validation before user creation.
         """
         if not username:
-            raise ValueError("The given username must be set")
-
+            raise ValueError('The given username must be set')
+        
         email = self.normalize_email(email)
         username = self.model.normalize_username(username)
-
+        
         # Validate password if provided
         if password is not None:
             try:
                 validate_password(password)
             except ValidationError as error:
                 raise ValidationError({"password": error.messages})
-
+        
         user = self.model(username=username, email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
 
+
 class User(AbstractUser):
     """Extended user model for the auction system"""
-
     email = models.EmailField(unique=True)
-    nickname = models.CharField(
-        max_length=50, blank=True, unique=True
-    )  # Added unique=True
+    nickname = models.CharField(max_length=50, blank=True, unique=True)
     full_name = models.CharField(max_length=100, blank=True)
     email_verified = models.BooleanField(default=False)
     verification_token = models.CharField(max_length=100, blank=True)
     verification_token_expires = models.DateTimeField(null=True, blank=True)
     google_id = models.CharField(max_length=100, blank=True, null=True, unique=True)
     profile_picture = models.URLField(blank=True, null=True)
-
+    
+    # Notification preferences
+    outbid_notifications_enabled = models.BooleanField(default=True)
+    win_notifications_enabled = models.BooleanField(default=True)
+    
     # Set the custom manager
     objects = CustomUserManager()
-
+    
     def __str__(self):
         return self.email or self.username
-
+    
     class Meta:
-        verbose_name = "User"
-        verbose_name_plural = "Users"
-
+        verbose_name = 'User'
+        verbose_name_plural = 'Users'
 
 class LoginAttempt(models.Model):
     """Track login attempts for rate limiting"""
-
     email = models.EmailField()
     ip_address = models.GenericIPAddressField()
     timestamp = models.DateTimeField(auto_now_add=True)
     success = models.BooleanField(default=False)
-
+    
     def __str__(self):
         return f"{self.email} - {self.ip_address} - {'Success' if self.success else 'Failed'}"
-
+    
     class Meta:
-        ordering = ["-timestamp"]
-
-
+        ordering = ['-timestamp']
+        
 class BidAttempt(models.Model):
     """Track bid attempts for rate limiting"""
-
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     ip_address = models.GenericIPAddressField()
     timestamp = models.DateTimeField(auto_now_add=True)
     success = models.BooleanField(default=False)
-
+    
     def __str__(self):
         return f"{self.user or 'Anonymous'} - {self.ip_address} - {'Success' if self.success else 'Failed'}"
-
+    
     class Meta:
-        ordering = ["-timestamp"]
+        ordering = ['-timestamp']
 
 
 class Category(models.Model):
@@ -123,7 +122,11 @@ class Item(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     winner = models.ForeignKey(
-        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="won_items"
+        User, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name="won_items"
     )
     winner_notified = models.BooleanField(default=False)
     winner_contacted = models.DateTimeField(null=True, blank=True)
@@ -143,10 +146,24 @@ class Item(models.Model):
             self.current_price = self.starting_price
         super().save(*args, **kwargs)
 
+    def save(self, *args, **kwargs):
+        # Make sure current_price is set for new items
+        if not self.id or not self.current_price:
+            self.current_price = self.starting_price
+            
+        # Ensure winners are only assigned to ended auctions
+        if self.winner and self.end_date > timezone.now():
+            self.winner = None
+            self.winner_notified = False
+            self.winner_contacted = None
+            
+        super().save(*args, **kwargs)
+
+        
 
 class Bid(models.Model):
     item = models.ForeignKey(Item, related_name="bids", on_delete=models.CASCADE)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE,null=True) 
     amount = models.DecimalField(
         max_digits=10, decimal_places=2, validators=[MinValueValidator(0.01)]
     )
@@ -156,8 +173,9 @@ class Bid(models.Model):
         ordering = ["-amount"]
 
     def __str__(self):
-        # return f"{user_email} bid ${self.amount} on {self.item.title}" #this made docker undefined
+        #return f"{user_email} bid ${self.amount} on {self.item.title}" #this made docker undefined
         return f"{self.user.email if self.user else 'Unknown'} bid ${self.amount} on {self.item.title}"
+
 
     def clean(self):
         if self.item.bids.exists():
@@ -174,53 +192,50 @@ class Bid(models.Model):
 
 
 class Message(models.Model):
-    sender = models.ForeignKey(
-        User, on_delete=models.CASCADE, related_name="sent_messages"
-    )
-    receiver = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        related_name="received_messages",
-        null=True,
-        blank=True,
-    )
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_messages', null=True, blank=True)
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
-
+    
     class Meta:
-        ordering = ["created_at"]
-
+        ordering = ['created_at']
+    
     def __str__(self):
         return f"From {self.sender} to {self.receiver or 'Admin'} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
 
+
 class ItemImage(models.Model):
     item = models.ForeignKey(Item, related_name="images", on_delete=models.CASCADE)
-    image = models.ImageField(upload_to="images/")
+    
+    # Update this line to explicitly use S3 storage
+    image = models.ImageField(upload_to="items/")
     order = models.IntegerField(default=0)
-
+    
+    class Meta:
+        ordering = ["order"]
+    
+    def __str__(self):
+        return f"Image {self.order} for {self.item.title}"
+        
+    # Add this method to force S3 storage
     def save(self, *args, **kwargs):
-        # Check if this is a new image being saved (not in database yet)
-        if self.image and hasattr(self.image, "file") and not self.id:
-            from django.core.files.base import ContentFile
-
-            # Read the file content
-            file_content = self.image.read()
-
-            # Create file name (keep original or generate a new one if needed)
-            file_name = self.image.name
-
-            # Reset file pointer
-            self.image.seek(0)
-
-            # Replace with ContentFile to ensure proper handling
-            self.image = ContentFile(file_content, name=file_name)
-
-        # Call the original save method
-        super().save(*args, **kwargs)
-
-    def get_image_url(self):
-        if self.image and hasattr(self.image, "url"):
-            return self.image.url
-        return None
+        from django.conf import settings
+        from core.storage_backends import S3MediaStorage
+        
+        if settings.USE_S3 and not self.id:  # Only for new uploads
+            # Get the image before saving
+            img_file = self.image
+            # Don't save yet
+            self.image = None
+            # Save to get ID
+            super().save(*args, **kwargs)
+            # Now save with proper storage
+            storage = S3MediaStorage()
+            self.image.storage = storage
+            self.image.save(img_file.name, img_file, save=False)
+            # Update only the image field
+            ItemImage.objects.filter(id=self.id).update(image=self.image)
+        else:
+            super().save(*args, **kwargs)

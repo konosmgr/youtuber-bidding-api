@@ -9,11 +9,12 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
-    """Serializer for user details"""
+    """Serializer for user details including notification preferences"""
     class Meta:
         model = User
         fields = ['id', 'email', 'username', 'nickname', 'full_name', 
-                  'profile_picture', 'email_verified', 'is_staff']
+                  'profile_picture', 'email_verified', 'is_staff',
+                  'outbid_notifications_enabled', 'win_notifications_enabled']
         read_only_fields = ['id', 'email_verified', 'is_staff']
         
     def validate_nickname(self, value):
@@ -137,6 +138,8 @@ class ItemSerializer(serializers.ModelSerializer):
         source="category", queryset=Category.objects.all(), write_only=True
     )
 
+    winner = UserSerializer(read_only=True)
+
     class Meta:
         model = Item
         fields = [
@@ -153,7 +156,10 @@ class ItemSerializer(serializers.ModelSerializer):
             "images",
             "bids",
             "created_at",
-            "youtube_url"
+            "youtube_url",
+            "winner",
+            "winner_notified",
+            "winner_contacted",
         ]
         read_only_fields = ["current_price", "created_at"]
 

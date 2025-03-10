@@ -17,7 +17,7 @@ DEBUG = os.getenv("DEBUG", "True") == "True"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,api").split(",")
 
 # Development-specific apps
-INSTALLED_APPS += []
+INSTALLED_APPS += ['django_celery_beat']
 
 # Development-specific middleware
 MIDDLEWARE += []
@@ -88,8 +88,9 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False
 
 # Email settings for development (console backend)
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-DEFAULT_FROM_EMAIL = "noreply@example.com"
+EMAIL_BACKEND = 'django_ses.SESBackend'
+AWS_SES_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'us-east-2')
+DEFAULT_FROM_EMAIL = 'bettingonalaskasite@gmail.com'
 
 # Debug print S3 settings before using them
 print(
@@ -141,3 +142,47 @@ LOGGING = {
 
 # Set this for conditional URL patterns
 USE_S3 = True
+
+#added stuff from here on
+
+
+# Celery settings
+CELERY_BROKER_URL = 'redis://redis:6379/0'  # Use Redis as a broker
+CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Update CSP settings for development
+CSP_SCRIPT_SRC += (
+    "'unsafe-inline'",
+    "'unsafe-eval'",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://backend:8000",
+)
+
+CSP_STYLE_SRC += (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
+
+CSP_IMG_SRC += (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "blob:",
+)
+
+CSP_CONNECT_SRC += (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "ws://localhost:5173",
+    "ws://127.0.0.1:5173",
+)
+
+CSP_FONT_SRC += (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
