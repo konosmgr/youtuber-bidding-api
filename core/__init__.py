@@ -1,3 +1,4 @@
-from .celery import app as celery_app
-
-__all__ = ['celery_app']
+"""
+Core module initialization
+"""
+# This file is intentionally left empty to avoid circular import issues

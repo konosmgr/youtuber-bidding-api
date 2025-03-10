@@ -1,5 +1,4 @@
 FROM python:3.11-slim
-
 # Set environment variables
 ENV PYTHONFAULTHANDLER=1 \
     PYTHONUNBUFFERED=1 \
@@ -11,7 +10,7 @@ ENV PYTHONFAULTHANDLER=1 \
     POETRY_VIRTUALENVS_CREATE=false \
     POETRY_VERSION=1.7.1 \
     POETRY_HOME="/opt/poetry" \
-    DJANGO_SETTINGS_MODULE=core.settings.dev
+    DJANGO_SETTINGS_MODULE="core.settings"
 
 # Set working directory
 WORKDIR /app
@@ -37,26 +36,8 @@ COPY pyproject.toml poetry.lock* /app/
 # Install dependencies
 RUN poetry install --no-interaction --no-ansi --no-root
 
-# Copy the rest of the application code
-COPY . /app/
-
 # Expose Django port
 EXPOSE 8000
 
-# Create a startup script
-RUN echo '#!/bin/bash\n\
-echo "Waiting for PostgreSQL..."\n\
-while ! pg_isready -h $POSTGRES_HOST -p $POSTGRES_PORT -U $POSTGRES_USER; do\n\
-  sleep 1\n\
-done\n\
-echo "PostgreSQL is ready"\n\
-\n\
-echo "Running migrations..."\n\
-python manage.py migrate\n\
-\n\
-echo "Starting development server..."\n\
-python manage.py runserver 0.0.0.0:8000\n\
-' > /app/start.sh && chmod +x /app/start.sh
-
-# Run the startup script
-CMD ["/app/start.sh"]
+# Run Django development server
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
