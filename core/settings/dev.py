@@ -13,8 +13,17 @@ boto3.set_stream_logger("", logging.DEBUG)
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-development-key")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,api").split(",")
+#DEBUG = os.getenv("DEBUG", "True") == "True"
+DEBUG = True
+#ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,api").split(",")
+ALLOWED_HOSTS = [
+    "localhost", 
+    "127.0.0.1", 
+    "api", 
+    "youtuber-bidding-api-api-1", 
+    "0.0.0.0",
+    "*"  # For development only, remove in production
+]
 
 # Development-specific apps
 INSTALLED_APPS += ['django_celery_beat']
@@ -29,6 +38,8 @@ RECAPTCHA_SECRET_KEY = "temporary-dev-key"
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://youtuber-bidding-app-app-1:5173",
+    "http://172.19.0.2:5173",  # This is the IP we saw in your docker network inspect
 ]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False
@@ -68,6 +79,8 @@ CSRF_USE_SESSIONS = False
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://youtuber-bidding-app-app-1:5173",
+    "http://172.19.0.2:5173",
 ]
 
 # Session settings for development
