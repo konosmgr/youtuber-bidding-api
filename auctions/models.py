@@ -130,6 +130,13 @@ class Item(models.Model):
     winner_notified = models.BooleanField(default=False)
     winner_contacted = models.DateTimeField(null=True, blank=True)
 
+    # Add index to end_date for efficient queries of active/expired items
+    class Meta:
+        indexes = [
+            models.Index(fields=["end_date"]),
+            models.Index(fields=["is_active"]),
+        ]
+
     if TYPE_CHECKING:
         bids: RelatedManager["Bid"]
         images: RelatedManager["ItemImage"]
@@ -138,12 +145,6 @@ class Item(models.Model):
 
     def __str__(self):
         return self.title
-
-    def save(self, *args, **kwargs):  # This is line 100
-        # Make sure the following lines are properly indented
-        if not self.id or not self.current_price:  # This is line 102
-            self.current_price = self.starting_price
-        super().save(*args, **kwargs)
 
     def save(self, *args, **kwargs):
         # Make sure current_price is set for new items
