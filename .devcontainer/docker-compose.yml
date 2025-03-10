@@ -14,4 +14,4 @@ services:
       - youtuber-bidding
 networks:
   youtuber-bidding:
-    driver: bridge
+    external: true
