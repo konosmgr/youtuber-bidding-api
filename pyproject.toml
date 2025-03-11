@@ -38,6 +38,7 @@ psycopg2-binary = "^2.9.9"
 celery = "^5.4.0"
 django-celery-beat = "^2.7.0"
 redis = "5.0.1"
+django-silk = "^5.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.1"

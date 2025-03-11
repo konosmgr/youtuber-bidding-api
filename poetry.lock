@@ -56,6 +56,21 @@ files = [
 ]
 
 [[package]]
+name = "autopep8"
+version = "2.3.2"
+description = "A tool that automatically formats Python code to conform to the PEP 8 style guide"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "autopep8-2.3.2-py2.py3-none-any.whl", hash = "sha256:ce8ad498672c845a0c3de2629c15b635ec2b05ef8177a6e7c91c74f3e9b51128"},
+    {file = "autopep8-2.3.2.tar.gz", hash = "sha256:89440a4f969197b69a995e4ce0661b031f455a9f776d2c5ba3dbd83466931758"},
+]
+
+[package.dependencies]
+pycodestyle = ">=2.12.0"
+
+[[package]]
 name = "billiard"
 version = "4.2.1"
 description = "Python multiprocessing fork with improvements and bugfixes"
@@ -634,6 +649,24 @@ bounce = ["cryptography (>=36.0.2)", "requests (>=2.32.1)"]
 events = ["cryptography (>=36.0.2)", "requests (>=2.32.1)"]
 
 [[package]]
+name = "django-silk"
+version = "5.3.2"
+description = "Silky smooth profiling for the Django Framework"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "django_silk-5.3.2-py3-none-any.whl", hash = "sha256:49f1caebfda28b1707f0cfef524e0476beb82b8c5e40f5ccff7f73a6b4f6d3ac"},
+    {file = "django_silk-5.3.2.tar.gz", hash = "sha256:b0db54eebedb8d16f572321bd6daccac0bd3f547ae2618bb45d96fe8fc02229d"},
+]
+
+[package.dependencies]
+autopep8 = "*"
+Django = ">=4.2"
+gprof2dot = ">=2017.09.19"
+sqlparse = "*"
+
+[[package]]
 name = "django-storages"
 version = "1.14.5"
 description = "Support for many storage backends in Django"
@@ -785,6 +818,18 @@ requests-oauthlib = ">=0.7.0"
 
 [package.extras]
 tool = ["click (>=6.0.0)"]
+
+[[package]]
+name = "gprof2dot"
+version = "2024.6.6"
+description = "Generate a dot graph from the output of several profilers."
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "gprof2dot-2024.6.6-py2.py3-none-any.whl", hash = "sha256:45b14ad7ce64e299c8f526881007b9eb2c6b75505d5613e96e66ee4d5ab33696"},
+    {file = "gprof2dot-2024.6.6.tar.gz", hash = "sha256:fa1420c60025a9eb7734f65225b4da02a10fc6dd741b37fa129bc6b41951e5ab"},
+]
 
 [[package]]
 name = "gunicorn"
@@ -1286,7 +1331,7 @@ version = "2.12.1"
 description = "Python style guide checker"
 optional = false
 python-versions = ">=3.8"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "pycodestyle-2.12.1-py2.py3-none-any.whl", hash = "sha256:46f0fb92069a7c28ab7bb558f05bfc0110dac69a0cd23c61ea0040283a9d78b3"},
     {file = "pycodestyle-2.12.1.tar.gz", hash = "sha256:6838eae08bbce4f6accd5d5572075c63626a15ee3e6f842df996bf62f6d73521"},
@@ -1736,4 +1781,4 @@ brotli = ["brotli"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "d603e1ebf47c19aa9ecfdb61d355b16d43fc8db99554bf086184d5cdf8fda4df"
+content-hash = "c0353e5e8362ac995b9961cfe157d6fdb5bde5251a4c75a69399c55cedb2abe6"

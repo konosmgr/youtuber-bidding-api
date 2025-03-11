@@ -1,3 +1,58 @@
+# Add 'silk' to your INSTALLED_APPS
+THIRD_PARTY_APPS = [
+    "rest_framework",
+    "corsheaders",
+    "storages",  # For S3 storage
+    "silk",  # Django Silk for profiling
+]
+
+# Add Silk middleware - place it as the first middleware
+MIDDLEWARE = [
+    "silk.middleware.SilkyMiddleware",  # Add this as the first middleware
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",  # For admin static files
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "csp.middleware.CSPMiddleware",
+]
+
+# Add Silk configuration settings
+SILKY_PYTHON_PROFILER = True
+SILKY_PYTHON_PROFILER_BINARY = True
+SILKY_ANALYZE_QUERIES = True
+SILKY_META = True
+SILKY_INTERCEPT_PERCENT = 100  # Log all requests
+SILKY_MAX_RECORDED_REQUESTS = 1000
+SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
+
+# Only allow superusers to access Silk in production
+SILKY_AUTHENTICATION = True
+SILKY_AUTHORISATION = True
+
+
+# Optional: function to determine if user is authorized to access Silk
+def SILKY_AUTHORISATION(user):
+    return user.is_superuser
+
+
+# Add CSP configuration for Silk
+CSP_SCRIPT_SRC = (
+    "'self'",
+    "https://accounts.google.com",
+    "https://apis.google.com",
+    "https://ssl.gstatic.com",
+    "https://*.googleusercontent.com",
+    "https://cdnjs.cloudflare.com",
+    "'unsafe-inline'",  # Needed for Silk
+)
+
+# Add Silk URL to your urls.py
+# path('silk/', include('silk.urls', namespace='silk'))
 """
 Django base settings for core project.
 Common settings shared across all environments.
@@ -28,6 +83,7 @@ THIRD_PARTY_APPS = [
     "rest_framework",
     "corsheaders",
     "storages",  # For S3 storage
+    "silk",
 ]
 
 LOCAL_APPS = [
@@ -37,6 +93,7 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    "silk.middleware.SilkyMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # For admin static files
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -199,6 +256,25 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 # Frontend URL for email verification links
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
+# Add Silk configuration settings
+SILKY_PYTHON_PROFILER = True
+SILKY_PYTHON_PROFILER_BINARY = True
+SILKY_ANALYZE_QUERIES = True
+SILKY_META = True
+SILKY_INTERCEPT_PERCENT = 100  # Log all requests
+SILKY_MAX_RECORDED_REQUESTS = 1000
+SILKY_MAX_RECORDED_REQUESTS_CHECK_PERCENT = 10
+
+# Only allow superusers to access Silk in production
+SILKY_AUTHENTICATION = True
+SILKY_AUTHORISATION = True
+
+
+# Optional: function to determine if user is authorized to access Silk
+def SILKY_AUTHORISATION(user):
+    return user.is_superuser
+
+
 # Content Security Policy settings
 CSP_DEFAULT_SRC = ("'self'",)
 CSP_SCRIPT_SRC = (
@@ -208,6 +284,7 @@ CSP_SCRIPT_SRC = (
     "https://ssl.gstatic.com",
     "https://*.googleusercontent.com",
     "https://cdnjs.cloudflare.com",
+    "'unsafe-inline'",
 )
 CSP_STYLE_SRC = (
     "'self'",
