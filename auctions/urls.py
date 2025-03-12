@@ -1,13 +1,13 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-from . import views
-from . import views_analytics
+
+from . import views, views_analytics
 
 router = DefaultRouter()
-router.register(r"items", views.ItemViewSet)
+router.register(r"items", views.ItemViewSet, basename="items")
 router.register(r"categories", views.CategoryViewSet)
 router.register(r"users", views.UserViewSet)
-router.register(r"messages", views.MessageViewSet, basename='messages')
+router.register(r"messages", views.MessageViewSet, basename="messages")
 
 urlpatterns = [
     path("", include(router.urls)),
@@ -18,7 +18,11 @@ urlpatterns = [
     path("logout/", views.logout_view, name="logout"),
     path("verify-email/<str:token>/", views.verify_email, name="verify_email"),
     path("resend-verification/", views.resend_verification, name="resend_verification"),
-    path("messages/user/<int:user_id>/", views.MessageViewSet.as_view({'get': 'user_chat'}), name="user-chat"),
+    path(
+        "messages/user/<int:user_id>/",
+        views.MessageViewSet.as_view({"get": "user_chat"}),
+        name="user-chat",
+    ),
     path("debug-message/", views.debug_send_message, name="debug_message"),
     path("analytics/overview/", views_analytics.analytics_overview, name="analytics_overview"),
     path("analytics/users/", views_analytics.user_metrics, name="user_metrics"),
@@ -30,6 +34,6 @@ urlpatterns = [
     path("admin/user-won-items/<int:user_id>/", views.user_won_items, name="user_won_items"),
     path("admin/winner-ids/", views.winner_ids, name="winner_ids"),
     # Keep only the dropdown winner assignment endpoint
-    path("admin/mark_winners/", views.mark_winners, name="mark_winners"),   
+    path("admin/mark_winners/", views.mark_winners, name="mark_winners"),
     path("admin/contact_winners/", views.contact_winners, name="contact_winners"),
 ]

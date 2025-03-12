@@ -15,8 +15,8 @@ from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
-from django.db import models
-from django.db.models import Count, Q
+from django.db import models, transaction
+from django.db.models import Count, Prefetch, F, Q, OuterRef, Subquery
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.template.loader import render_to_string
@@ -29,6 +29,11 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import Throttled
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from django.db.models import F, Count, Sum, Avg, Max, Min, OuterRef, Subquery
+
+from .pagination import OptimizedPagination
+
+
 
 from .models import (
     Bid,
@@ -44,7 +49,8 @@ from .serializers import (
     BidSerializer,
     CategorySerializer,
     GoogleAuthSerializer,
-    ItemSerializer,
+    ItemDetailSerializer,
+    ItemListSerializer,
     LoginSerializer,
     MessageSerializer,
     UserRegistrationSerializer,
@@ -139,6 +145,12 @@ def send_verification_email(user):
         return False
 
 
+
+
+
+
+
+
 @api_view(["GET"])
 @ensure_csrf_cookie
 @permission_classes([AllowAny])
@@ -166,7 +178,7 @@ def past_auctions(request):
         items = Item.objects.filter(query).order_by("-end_date")
 
         # Simple response without pagination (easier to debug)
-        serializer = ItemSerializer(items, many=True)
+        serializer = ItemDetailSerializer(items, many=True)
         return Response(serializer.data)
 
     except Exception as e:
@@ -578,397 +590,144 @@ def resend_verification(request):
             }
         )
 
-
 class ItemViewSet(viewsets.ModelViewSet):
-    queryset = Item.objects.all()
-    serializer_class = ItemSerializer
-
+    """Optimized ItemViewSet with separate list and detail serializers"""
+    pagination_class = OptimizedPagination
+    
+    def get_serializer_class(self):
+        if self.action == 'list' or self.action == 'past_auctions':
+            return ItemListSerializer
+        return ItemDetailSerializer
+    
     def get_permissions(self):
-        if self.action in ["list", "retrieve"]:
+        if self.action in ["list", "retrieve", "past_auctions"]:
             permission_classes = [AllowAny]
-        elif self.action in [
-            "create",
-            "update",
-            "partial_update",
-            "destroy",
-            "add_images",
-            "delete_images",
-        ]:
-            permission_classes = [IsAuthenticated, IsAdminUser]
+        elif self.action in ["create", "update", "partial_update", "destroy", "add_images", "delete_images"]:
+            permission_classes = [IsAuthenticated, permissions.IsAdminUser]
         else:
             permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
 
-    def list(self, request, *args, **kwargs):
-        start_time = time.time()
-
-        # Log the start of the request
-        logger.info(f"Started loading items list at: {start_time}")
-
-        # Timing the queryset evaluation
-        queryset_start = time.time()
-        queryset = self.filter_queryset(self.get_queryset())
-        queryset_time = time.time() - queryset_start
-        logger.info(f"Time to get and filter queryset: {queryset_time:.4f}s")
-
-        # Timing the pagination
-        page_start = time.time()
-        page = self.paginate_queryset(queryset)
-        page_time = time.time() - page_start
-        logger.info(f"Time to paginate queryset: {page_time:.4f}s")
-
-        if page is not None:
-            # Timing the serialization
-            serializer_start = time.time()
-            serializer = self.get_serializer(page, many=True)
-            serializer_time = time.time() - serializer_start
-            logger.info(f"Time to serialize paginated data: {serializer_time:.4f}s")
-
-            response_time = time.time() - start_time
-            logger.info(f"Total time to process list request: {response_time:.4f}s")
-            return self.get_paginated_response(serializer.data)
-
-        # Timing the serialization (no pagination)
-        serializer_start = time.time()
-        serializer = self.get_serializer(queryset, many=True)
-        serializer_time = time.time() - serializer_start
-        logger.info(f"Time to serialize all data: {serializer_time:.4f}s")
-
-        response_time = time.time() - start_time
-        logger.info(f"Total time to process list request: {response_time:.4f}s")
-        return Response(serializer.data)
-
-    def create(self, request, *args, **kwargs):
-        start_time = time.time()
-        logger.info(f"Started item creation at: {start_time}")
-
-        try:
-            # Debug logs
-            logger.info(f"Received data: {request.data}")
-            logger.info(f"Files in request: {request.FILES}")
-
-            # Check for multiple images
-            images = request.FILES.getlist("images")
-            logger.info(f"Found {len(images)} images: {[img.name for img in images]}")
-
-            serializer_start = time.time()
-            serializer = self.get_serializer(data=request.data)
-            serializer_time = time.time() - serializer_start
-            logger.info(f"Time to initialize serializer: {serializer_time:.4f}s")
-
-            validation_start = time.time()
-            if not serializer.is_valid():
-                logger.error(f"Serializer errors: {serializer.errors}")
-                return Response(
-                    {"detail": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
-                )
-            validation_time = time.time() - validation_start
-            logger.info(f"Time to validate data: {validation_time:.4f}s")
-
-            save_start = time.time()
-            self.perform_create(serializer)
-            save_time = time.time() - save_start
-            logger.info(f"Time to save item: {save_time:.4f}s")
-
-            total_time = time.time() - start_time
-            logger.info(f"Total time to create item: {total_time:.4f}s")
-
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            error_time = time.time() - start_time
-            logger.exception(f"Error creating item after {error_time:.4f}s: {str(e)}")
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-    def update(self, request, *args, **kwargs):
-        """Handle updates for items"""
-        try:
-            # Get the existing item
-            instance = self.get_object()
-
-            # Partial update - only update fields that are included
-            serializer = self.get_serializer(
-                instance, data=request.data, partial=True  # Allow partial updates
-            )
-
-            if not serializer.is_valid():
-                return Response(
-                    {"detail": serializer.errors}, status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Save the updated item
-            self.perform_update(serializer)
-
-            # Return the updated item
-            return Response(serializer.data)
-
-        except Exception as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
     def get_queryset(self):
         queryset = Item.objects.all()
-
+        
         # Filter by category if provided
-        category = self.request.query_params.get("category", None)
+        category = self.request.query_params.get('category', None)
         if category:
             queryset = queryset.filter(category__code=category)
-
+            
         # Filter by active status if provided
-        active = self.request.query_params.get("active", None)
+        active = self.request.query_params.get('active', None)
         if active is not None:
-            is_active = active.lower() == "true"
+            is_active = active.lower() == 'true'
             if is_active:
-                # Active auctions are those that haven't ended yet
-                queryset = queryset.filter(end_date__gt=timezone.now(), is_active=True)
+                # Active auctions that haven't ended yet
+                queryset = queryset.active()
             else:
-                # Past auctions are those that have ended
-                queryset = queryset.filter(end_date__lte=timezone.now())
-
+                # Past auctions that have ended
+                queryset = queryset.ended()
+        
+        # Optimize query based on action
+        if self.action == 'list' or self.action == 'past_auctions':
+            # For list views, optimize by using our custom manager methods
+            queryset = queryset.with_bid_counts().with_first_image()
+        else:
+            # For detail view, fully prefetch related objects
+            queryset = queryset.with_full_relations()
+            
         return queryset
+    
+        
+    def list(self, request, *args, **kwargs):
+        cache_key = get_item_list_cache_key(request)
+        cached_data = cache.get(cache_key)
+        
+        if cached_data:
+            return Response(cached_data)
+        
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, timeout=settings.ITEM_LIST_CACHE_TIMEOUT)
+        return response
+    
+    def retrieve(self, request, *args, **kwargs):
+        item_id = kwargs.get('pk')
+        cache_key = get_item_detail_cache_key(item_id)
+        cached_data = cache.get(cache_key)
+        
+        if cached_data:
+            return Response(cached_data)
+        
+        response = super().retrieve(request, *args, **kwargs)
+        
+        # Only cache if this is a GET and successful
+        if request.method == 'GET' and response.status_code == 200:
+            cache.set(cache_key, response.data, timeout=settings.ITEM_DETAIL_CACHE_TIMEOUT)
+        
+        return response
+    
+    # Add cache invalidation to other methods
+    def update(self, request, *args, **kwargs):
+        item_id = kwargs.get('pk')
+        response = super().update(request, *args, **kwargs)
+        
+        # Clear specific caches
+        cache.delete(get_item_detail_cache_key(item_id))
+        pattern = f'item_list_*'
+        keys = cache.keys(pattern)
+        cache.delete_many(keys)
+        
+        return response
 
     @action(detail=True, methods=["POST"], permission_classes=[IsAuthenticated])
-    def add_images(self, request, pk=None):
-        """Add new images to an existing item - fixed version"""
-        try:
-            item = self.get_object()
-            print(f"=== Starting add_images for item {pk} ===")
-
-            if "images" not in request.FILES:
-                return Response(
-                    {"detail": "No images provided"}, status=status.HTTP_400_BAD_REQUEST
-                )
-
-            images = request.FILES.getlist("images")
-            print(f"Processing {len(images)} images")
-
-            # Import boto3
-            import os
-            import uuid
-
-            import boto3
-            from django.conf import settings
-            from django.core.files.base import ContentFile
-
-            # Set up S3 client
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=settings.AWS_S3_ENDPOINT_URL,
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            )
-
-            # Add new images
-            created_images = []
-            for idx, image in enumerate(images):
-                try:
-                    # Generate a unique filename
-                    file_extension = os.path.splitext(image.name)[1].lower()
-                    unique_name = f"{uuid.uuid4().hex}{file_extension}"
-                    s3_key = f"images/{unique_name}"
-
-                    # Read file content and upload directly to S3
-                    file_content = image.read()
-                    s3.put_object(
-                        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                        Key=s3_key,
-                        Body=file_content,
-                        ContentType=image.content_type or "image/jpeg",
-                    )
-
-                    # Create database record with the S3 path
-                    img = ItemImage.objects.create(item=item, order=idx)
-
-                    # Now set the image field with our S3 path
-                    from django.core.files.storage import default_storage
-
-                    img.image = s3_key
-                    img.save()
-
-                    print(
-                        f"Saved image record to database with ID: {img.id}, path: {img.image.name}"
-                    )
-                    created_images.append(img)
-
-                except Exception as e:
-                    print(f"Error processing image: {str(e)}")
-                    import traceback
-
-                    traceback.print_exc()
-
-            return Response(
-                {"message": f"Successfully uploaded {len(created_images)} images"},
-                status=status.HTTP_201_CREATED,
-            )
-
-        except Exception as e:
-            print(f"Overall exception: {str(e)}")
-            import traceback
-
-            traceback.print_exc()
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=["POST"], permission_classes=[IsAuthenticated])
-    def delete_images(self, request, pk=None):
-        """Delete specified images from an item"""
-        try:
-            item = self.get_object()
-            image_ids = request.data.get("image_ids", [])
-
-            if not image_ids:
-                return Response(
-                    {"detail": "No image IDs provided"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            logger.info(f"Deleting images with IDs: {image_ids} from item {item.id}")
-
-            # Delete specified images
-            deleted_count = 0
-            for image_id in image_ids:
-                try:
-                    image = ItemImage.objects.get(id=image_id, item=item)
-                    # Delete the actual file if it exists
-                    if image.image:
-                        if os.path.isfile(image.image.path):
-                            os.remove(image.image.path)
-                    image.delete()
-                    deleted_count += 1
-                    logger.info(f"Deleted image ID: {image_id}")
-                except ItemImage.DoesNotExist:
-                    logger.warning(
-                        f"Image ID {image_id} not found or does not belong to this item"
-                    )
-                except Exception as e:
-                    logger.error(f"Error deleting image {image_id}: {str(e)}")
-
-            # Return success response
-            return Response(
-                {"detail": f"Successfully deleted {deleted_count} images"},
-                status=status.HTTP_200_OK,
-            )
-        except Exception as e:
-            logger.exception(f"Error in delete_images: {str(e)}")
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def place_bid(self, request, pk=None):
-        """Place bid with rate limiting and user authentication, respecting notification preferences"""
+        """Optimized bid placement with proper transaction handling"""
         try:
-            user = request.user
-            ip_address = request.META.get("REMOTE_ADDR")
-
-            # Check rate limiting
-            if check_bid_rate_limit(user, ip_address):
-                return Response(
-                    {"detail": "Too many bid attempts. Please try again later."},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+            with transaction.atomic():
+                # Get the item with select_for_update to prevent race conditions
+                item = Item.objects.select_for_update().get(pk=pk)
+                
+                # Basic validation
+                if not item.is_active or item.end_date < timezone.now():
+                    return Response({"detail": "This auction is not active or has ended"}, status=400)
+                
+                # Validate bid amount
+                amount = request.data.get('amount')
+                if not amount:
+                    return Response({"detail": "Bid amount is required"}, status=400)
+                
+                try:
+                    amount = float(amount)
+                except ValueError:
+                    return Response({"detail": "Invalid bid amount"}, status=400)
+                
+                if amount <= float(item.current_price):
+                    return Response({"detail": f"Bid must be higher than current price of ${item.current_price}"}, status=400)
+                
+                if amount < float(item.current_price) + 1:
+                    return Response({"detail": "Minimum bid increment is $1.00"}, status=400)
+                
+                # Validate against maximum bid (if there are previous bids)
+                highest_bid = item.bids.order_by('-amount').first()
+                if highest_bid and amount > highest_bid.amount * 2:
+                    return Response({"detail": f"Bid cannot exceed ${int(highest_bid.amount * 2)} (100% more than current bid)"}, status=400)
+                
+                # Create the bid
+                bid = Bid.objects.create(
+                    item=item,
+                    user=request.user,
+                    amount=amount
                 )
-
-            # Record bid attempt
-            bid_attempt = BidAttempt.objects.create(
-                user=user, ip_address=ip_address, success=False
-            )
-
-            item = self.get_object()
-
-            # Check if auction is active
-            if not item.is_active:
-                return Response(
-                    {"detail": "This auction is not active"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Check if auction has ended
-            if item.end_date < timezone.now():
-                return Response(
-                    {"detail": "This auction has ended"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Validate bid amount
-            amount = request.data.get("amount")
-            if not amount:
-                return Response(
-                    {"detail": "Bid amount is required"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            try:
-                amount = float(amount)
-            except ValueError:
-                return Response(
-                    {"detail": "Invalid bid amount"}, status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Get current highest bid and bidder
-            previous_highest_bid = None
-            previous_highest_bidder = None
-
-            if item.bids.exists():
-                previous_highest_bid = (
-                    item.bids.first()
-                )  # Due to ordering = ['-amount']
-                previous_highest_bidder = previous_highest_bid.user
-
-            if amount <= float(item.current_price):
-                return Response(
-                    {
-                        "detail": f"Bid must be higher than current price of ${item.current_price}"
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if amount < float(item.current_price) + 1:
-                return Response(
-                    {"detail": "Minimum bid increment is $1.00"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Pre-validate the bid to catch ValidationError before creating
-            max_allowed = 0
-            if item.bids.exists():
-                highest_bid = item.bids.first()
-                max_allowed = highest_bid.amount * 2
-                if amount > max_allowed:
-                    return Response(
-                        {
-                            "detail": f"Bid cannot exceed {int(max_allowed)}$ (100% more than current bid)"
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-            # Create new bid (now should be safe from ValidationError)
-            try:
-                bid = Bid.objects.create(item=item, user=user, amount=amount)
-
+                
                 # Update item price
                 item.current_price = amount
-                item.save()
-
-                # Mark bid attempt as successful
-                bid_attempt.success = True
-                bid_attempt.save()
-
-                # Send outbid notification if there was a previous bidder
-                if previous_highest_bidder and previous_highest_bidder != user:
-                    # Check if previous highest bidder has outbid notifications enabled
-                    if previous_highest_bidder.outbid_notifications_enabled:
-                        send_outbid_notification(
-                            previous_highest_bidder,
-                            item,
-                            previous_highest_bid.amount,
-                            amount,
-                        )
-
-                return Response(BidSerializer(bid).data, status=status.HTTP_201_CREATED)
-            except Exception as create_error:
-                logger.error(f"Error creating bid: {str(create_error)}")
-                return Response(
-                    {"detail": str(create_error)}, status=status.HTTP_400_BAD_REQUEST
-                )
-
+                item.save(update_fields=['current_price'])
+                
+                return Response(BidSerializer(bid).data, status=201)
+                
+        except Item.DoesNotExist:
+            return Response({"detail": "Item not found"}, status=404)
         except Exception as e:
-            logger.error(f"Bid error: {str(e)}")
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": str(e)}, status=400)
 
 
 @api_view(["GET"])
@@ -1538,7 +1297,7 @@ def mark_winners(request):
             return Response(
                 {
                     "success": True,
-                    "item": ItemSerializer(item).data,
+                    "item": ItemDetailSerializer(item).data,
                     "message": f"Successfully assigned {user.email} as winner for {item.title}",
                 }
             )

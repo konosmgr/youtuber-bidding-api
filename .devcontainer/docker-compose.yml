@@ -12,6 +12,14 @@ services:
       - "8000:8000"
     networks:
       - youtuber-bidding
+  
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - youtuber-bidding
+
 networks:
   youtuber-bidding:
     external: true

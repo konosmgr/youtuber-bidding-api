@@ -5,7 +5,8 @@ from django.contrib.auth.models import AbstractUser, UserManager
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
-from django.db import models  # added the bellow for user login and auth
+from django.db import models
+from django.db.models import Count, F, OuterRef, Q, Subquery
 from django.utils import timezone
 
 if TYPE_CHECKING:
@@ -110,6 +111,70 @@ class Category(models.Model):
         return self.name
 
 
+class ItemQuerySet(models.QuerySet):
+    """Custom QuerySet with optimized queries for Items"""
+
+    def active(self):
+        """Get only active auctions that haven't ended"""
+        from django.utils import timezone
+
+        return self.filter(is_active=True, end_date__gt=timezone.now())
+
+    def ended(self):
+        """Get auctions that have ended"""
+        from django.utils import timezone
+
+        return self.filter(end_date__lte=timezone.now())
+
+    def with_bid_counts(self):
+        """Annotate with bid counts for more efficient querying"""
+        return self.annotate(bid_count=Count("bids", distinct=True))
+
+    def with_first_image(self):
+        """Annotate with the first image URL for efficient list views"""
+        first_image = (
+            ItemImage.objects.filter(item=OuterRef("pk")).order_by("order").values("image")[:1]
+        )
+
+        first_image_id = (
+            ItemImage.objects.filter(item=OuterRef("pk")).order_by("order").values("id")[:1]
+        )
+
+        return self.annotate(
+            first_image=Subquery(first_image), first_image_id=Subquery(first_image_id)
+        )
+
+    def by_category(self, category_code):
+        """Filter by category code"""
+        if not category_code:
+            return self
+        return self.filter(category__code=category_code)
+
+    def with_full_relations(self):
+        """Load all related data for detailed views"""
+        return self.prefetch_related(
+            "images",
+            "bids__user",
+        ).select_related("category", "winner")
+
+
+class ItemManager(models.Manager):
+    def get_queryset(self):
+        return ItemQuerySet(self.model, using=self._db)
+
+    def active(self):
+        return self.get_queryset().active()
+
+    def ended(self):
+        return self.get_queryset().ended()
+
+    def with_bid_counts(self):
+        return self.get_queryset().with_bid_counts()
+
+    def with_first_image(self):
+        return self.get_queryset().with_first_image()
+
+
 class Item(models.Model):
     category = models.ForeignKey(Category, on_delete=models.PROTECT)
     title = models.CharField(max_length=200)
@@ -129,13 +194,17 @@ class Item(models.Model):
     )
     winner_notified = models.BooleanField(default=False)
     winner_contacted = models.DateTimeField(null=True, blank=True)
+    objects = ItemManager()
 
     # Add index to end_date for efficient queries of active/expired items
     class Meta:
         indexes = [
             models.Index(fields=["end_date"]),
             models.Index(fields=["is_active"]),
+            models.Index(fields=["category"]),
+            models.Index(fields=["end_date", "is_active"]),
         ]
+        ordering = ["-created_at"]  # Default ordering
 
     if TYPE_CHECKING:
         bids: RelatedManager["Bid"]

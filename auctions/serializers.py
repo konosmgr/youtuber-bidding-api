@@ -1,8 +1,7 @@
-from .models import Item, Category, Bid, ItemImage, Message
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
-from .models import User, Bid, Item, Category, ItemImage
+from .models import User, Bid, Item, Category, ItemImage, Message
 from .profanity_filter import profanity_filter
 
 User = get_user_model()
@@ -103,7 +102,23 @@ class GoogleAuthSerializer(serializers.Serializer):
     """Serializer for Google authentication"""
     token = serializers.CharField(required=True)
     
-# Update your BidSerializer to work with the User model
+# Basic user info for bid serializer to reduce data
+class BidUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ["id", "nickname", "email"]
+        
+# Optimized BidSerializer for list views
+class BidListSerializer(serializers.ModelSerializer):
+    user_nickname = serializers.CharField(source='user.nickname', read_only=True)
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = Bid
+        fields = ["id", "user", "user_nickname", "user_email", "amount", "created_at"]
+        read_only_fields = ["id", "created_at", "user_nickname", "user_email"]
+
+# Full BidSerializer for detail views - keeping same as original for compatibility
 class BidSerializer(serializers.ModelSerializer):
     user_nickname = serializers.CharField(source='user.nickname', read_only=True)
     user_email = serializers.EmailField(source='user.email', read_only=True)
@@ -130,7 +145,45 @@ class ItemImageSerializer(serializers.ModelSerializer):
             return obj.image.url
         return None
 
-class ItemSerializer(serializers.ModelSerializer):
+# A lightweight serializer for list views
+class ItemListSerializer(serializers.ModelSerializer):
+    images = serializers.SerializerMethodField()
+    category = CategorySerializer(read_only=True)
+    bid_count = serializers.IntegerField(read_only=True, required=False)
+    
+    class Meta:
+        model = Item
+        fields = [
+            "id",
+            "title",
+            "description",
+            "category",
+            "starting_price",
+            "current_price",
+            "start_date",
+            "end_date",
+            "is_active",
+            "images",
+            "bid_count",
+            "created_at",
+            "youtube_url",
+        ]
+    
+    def get_images(self, obj):
+        # Return only the first image or an empty list
+        if hasattr(obj, 'first_image') and obj.first_image:
+            return [{"id": obj.first_image_id, "image": obj.first_image, "order": 0}]
+        
+        # Fallback if we don't have the annotation
+        if obj.images.exists():
+            first_image = obj.images.order_by('order').first()
+            return [{"id": first_image.id, "image": first_image.image.url, "order": 0}]
+            
+        return []
+
+# Keep the original ItemSerializer for backwards compatibility
+# but rename to ItemDetailSerializer for clarity
+class ItemDetailSerializer(serializers.ModelSerializer):
     images = ItemImageSerializer(many=True, read_only=True)
     category = CategorySerializer(read_only=True)
     bids = BidSerializer(many=True, read_only=True)

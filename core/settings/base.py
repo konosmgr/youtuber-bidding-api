@@ -93,7 +93,7 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
-    "silk.middleware.SilkyMiddleware",
+    "auctions.middleware.TimingMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # For admin static files
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -202,7 +202,7 @@ AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL = None
 AWS_S3_SIGNATURE_VERSION = "s3v4"
 AWS_S3_OBJECT_PARAMETERS = {
-    "CacheControl": "max-age=86400",
+    "CacheControl": "max-age=604800",
 }
 AWS_QUERYSTRING_AUTH = False
 
@@ -310,3 +310,33 @@ CSP_FRAME_SRC = (
     "'self'",
     "https://accounts.google.com",
 )
+
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/0"),
+        "TIMEOUT": 300,  # 5 minutes default timeout
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    }
+}
+
+
+# Cache timeouts for different types of data
+CATEGORY_CACHE_TIMEOUT = 60 * 60 * 24  # 24 hours for categories
+ITEM_LIST_CACHE_TIMEOUT = 60 * 5  # 5 minutes for item lists
+ITEM_DETAIL_CACHE_TIMEOUT = 60 * 2  # 2 minutes for item details
+
+
+# Database connection pooling
+DATABASES = {
+    "default": {
+        # Your existing DB settings here
+        "CONN_MAX_AGE": 60,  # Keep connections alive for 60 seconds
+        "OPTIONS": {
+            "connect_timeout": 10,
+        },
+    }
+}
