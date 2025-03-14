@@ -3,10 +3,11 @@
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import timedelta
-import time
-import logging
+from decimal import Decimal, InvalidOperation
+from functools import wraps
 
 import requests
 from django.conf import settings
@@ -16,7 +17,7 @@ from django.core.files.storage import default_storage
 from django.core.mail import send_mail
 from django.core.paginator import Paginator
 from django.db import models, transaction
-from django.db.models import Count, Prefetch, F, Q, OuterRef, Subquery
+from django.db.models import Avg, Count, F, Max, Min, OuterRef, Prefetch, Q, Subquery, Sum
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.template.loader import render_to_string
@@ -29,22 +30,9 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import Throttled
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
-from django.db.models import F, Count, Sum, Avg, Max, Min, OuterRef, Subquery
 
+from .models import Bid, BidAttempt, Category, Item, ItemImage, LoginAttempt, Message, User
 from .pagination import OptimizedPagination
-
-
-
-from .models import (
-    Bid,
-    BidAttempt,
-    Category,
-    Item,
-    ItemImage,
-    LoginAttempt,
-    Message,
-    User,
-)
 from .serializers import (
     BidSerializer,
     CategorySerializer,
@@ -66,6 +54,34 @@ LOGIN_ATTEMPT_PERIOD = 15 * 60  # 15 minutes in seconds
 MAX_BID_ATTEMPTS = 10  # Max bid attempts per minute
 BID_ATTEMPT_PERIOD = 60  # 1 minute in seconds
 
+# Cache timeouts
+MEDIUM_CACHE_TIMEOUT = 5 * 60  # 5 minutes
+SHORT_CACHE_TIMEOUT = 60  # 1 minute
+
+
+# Cache decorator for views
+def cache_response(timeout=MEDIUM_CACHE_TIMEOUT):
+    def decorator(view_func):
+        @wraps(view_func)
+        def _wrapped_view(request, *args, **kwargs):
+            # Skip caching for authenticated requests or non-GET requests
+            if request.method != "GET" or request.user.is_authenticated:
+                return view_func(request, *args, **kwargs)
+
+            # Create a cache key based on the full URL
+            cache_key = f"view_cache_{request.get_full_path()}"
+            response = cache.get(cache_key)
+
+            if response is None:
+                response = view_func(request, *args, **kwargs)
+                cache.set(cache_key, response, timeout)
+
+            return response
+
+        return _wrapped_view
+
+    return decorator
+
 
 # Helper functions
 def verify_recaptcha(recaptcha_response):
@@ -85,23 +101,36 @@ def verify_recaptcha(recaptcha_response):
 
 def check_login_rate_limit(email, ip_address):
     """Check if login attempts exceed rate limit"""
-    cutoff_time = timezone.now() - timedelta(seconds=LOGIN_ATTEMPT_PERIOD)
-    attempts = LoginAttempt.objects.filter(
-        email=email, ip_address=ip_address, timestamp__gte=cutoff_time, success=False
-    ).count()
+    # Use a cache key to avoid database hits for frequent checks
+    cache_key = f"login_attempts_{email}_{ip_address}"
+    attempts = cache.get(cache_key)
+
+    if attempts is None:
+        cutoff_time = timezone.now() - timedelta(seconds=LOGIN_ATTEMPT_PERIOD)
+        attempts = LoginAttempt.objects.filter(
+            email=email, ip_address=ip_address, timestamp__gte=cutoff_time, success=False
+        ).count()
+        cache.set(cache_key, attempts, 60)  # Cache for 1 minute
 
     return attempts >= MAX_LOGIN_ATTEMPTS
 
 
 def check_bid_rate_limit(user, ip_address):
     """Check if bid attempts exceed rate limit"""
-    cutoff_time = timezone.now() - timedelta(seconds=BID_ATTEMPT_PERIOD)
-    query = {"ip_address": ip_address, "timestamp__gte": cutoff_time}
+    # Use a cache key to avoid database hits for frequent checks
+    cache_key = f"bid_attempts_{getattr(user, 'id', 'anonymous')}_{ip_address}"
+    attempts = cache.get(cache_key)
 
-    if user and user.is_authenticated:
-        query["user"] = user
+    if attempts is None:
+        cutoff_time = timezone.now() - timedelta(seconds=BID_ATTEMPT_PERIOD)
+        query = {"ip_address": ip_address, "timestamp__gte": cutoff_time}
 
-    attempts = BidAttempt.objects.filter(**query).count()
+        if user and user.is_authenticated:
+            query["user"] = user
+
+        attempts = BidAttempt.objects.filter(**query).count()
+        cache.set(cache_key, attempts, 30)  # Cache for 30 seconds
+
     return attempts >= MAX_BID_ATTEMPTS
 
 
@@ -111,7 +140,7 @@ def send_verification_email(user):
     token = uuid.uuid4().hex
     user.verification_token = token
     user.verification_token_expires = timezone.now() + timedelta(hours=24)
-    user.save()
+    user.save(update_fields=["verification_token", "verification_token_expires"])
 
     # Build verification URL
     frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
@@ -122,9 +151,7 @@ def send_verification_email(user):
 
     # Create email body
     html_message = render_to_string("emails/email_verification.html", context)
-    plain_message = (
-        f"Please verify your email by clicking this link: {verification_url}"
-    )
+    plain_message = f"Please verify your email by clicking this link: {verification_url}"
 
     # Send email
     try:
@@ -143,12 +170,6 @@ def send_verification_email(user):
         logger.error(f"Failed to send verification email: {str(e)}")
         print(f"Failed to send verification email: {str(e)}")
         return False
-
-
-
-
-
-
 
 
 @api_view(["GET"])
@@ -271,9 +292,7 @@ def login_view(request):
         LoginAttempt.objects.create(email=email, ip_address=ip_address, success=False)
 
         print(f"Invalid CAPTCHA for {email}")
-        return Response(
-            {"detail": "Invalid CAPTCHA response."}, status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({"detail": "Invalid CAPTCHA response."}, status=status.HTTP_400_BAD_REQUEST)
 
     # Try to authenticate
     try:
@@ -285,9 +304,7 @@ def login_view(request):
         # Check for email verification
         if not user.email_verified:
             # Record failed attempt
-            LoginAttempt.objects.create(
-                email=email, ip_address=ip_address, success=False
-            )
+            LoginAttempt.objects.create(email=email, ip_address=ip_address, success=False)
 
             print(f"Email not verified for {email}")
 
@@ -296,10 +313,7 @@ def login_view(request):
             print(f"Token expires: {user.verification_token_expires}")
 
             # Generate a new token if needed
-            if (
-                not user.verification_token
-                or user.verification_token_expires < timezone.now()
-            ):
+            if not user.verification_token or user.verification_token_expires < timezone.now():
                 print(f"Generating new verification token for {email}")
                 # Generate a new token
                 send_verification_email(user)
@@ -322,14 +336,10 @@ def login_view(request):
             # Save the session explicitly
             request.session.save()
 
-            print(
-                f"Login successful for {email}, session key: {request.session.session_key}"
-            )
+            print(f"Login successful for {email}, session key: {request.session.session_key}")
 
             # Record successful login
-            LoginAttempt.objects.create(
-                email=email, ip_address=ip_address, success=True
-            )
+            LoginAttempt.objects.create(email=email, ip_address=ip_address, success=True)
 
             return Response(
                 {
@@ -341,23 +351,17 @@ def login_view(request):
             )
         else:
             # Record failed attempt
-            LoginAttempt.objects.create(
-                email=email, ip_address=ip_address, success=False
-            )
+            LoginAttempt.objects.create(email=email, ip_address=ip_address, success=False)
 
             print(f"Invalid password for {email}")
-            return Response(
-                {"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED
-            )
+            return Response({"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
     except User.DoesNotExist:
         # Record failed attempt
         LoginAttempt.objects.create(email=email, ip_address=ip_address, success=False)
 
         print(f"User not found for email: {email}")
-        return Response(
-            {"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED
-        )
+        return Response({"detail": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 @api_view(["POST"])
@@ -392,9 +396,7 @@ def google_auth(request):
             logger.info("Successfully verified Google token")
 
         except Exception as verify_error:
-            logger.error(
-                f"Google token verification error: {str(verify_error)}", exc_info=True
-            )
+            logger.error(f"Google token verification error: {str(verify_error)}", exc_info=True)
             return Response(
                 {"detail": f"Failed to verify Google token: {str(verify_error)}"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -405,9 +407,7 @@ def google_auth(request):
         email = id_info["email"]
         email_verified = id_info.get("email_verified", False)
 
-        logger.info(
-            f"Extracted user info from token - email: {email}, verified: {email_verified}"
-        )
+        logger.info(f"Extracted user info from token - email: {email}, verified: {email_verified}")
 
         if not email_verified:
             return Response(
@@ -423,9 +423,7 @@ def google_auth(request):
             # Check if user with this email exists
             try:
                 user = User.objects.get(email=email)
-                logger.info(
-                    f"Found existing user with email: {email}. Updating with Google ID."
-                )
+                logger.info(f"Found existing user with email: {email}. Updating with Google ID.")
                 # Update user with Google ID
                 user.google_id = google_id
                 if not user.profile_picture and "picture" in id_info:
@@ -460,9 +458,7 @@ def google_auth(request):
                     user.save()
                     logger.info(f"Created new user: {username}")
                 except Exception as create_error:
-                    logger.error(
-                        f"Error creating user: {str(create_error)}", exc_info=True
-                    )
+                    logger.error(f"Error creating user: {str(create_error)}", exc_info=True)
                     return Response(
                         {"detail": f"Error creating user: {str(create_error)}"},
                         status=status.HTTP_400_BAD_REQUEST,
@@ -537,9 +533,7 @@ def resend_verification(request):
     """Resend verification email with improved error handling"""
     email = request.data.get("email")
     if not email:
-        return Response(
-            {"detail": "Email is required"}, status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({"detail": "Email is required"}, status=status.HTTP_400_BAD_REQUEST)
 
     print(f"Resend verification request for email: {email}")
 
@@ -564,9 +558,7 @@ def resend_verification(request):
             time_remaining = (
                 user.verification_token_expires - (timezone.now() - timedelta(hours=23))
             ).seconds // 60
-            print(
-                f"Rate limit for resending: {time_remaining} minutes remaining for {email}"
-            )
+            print(f"Rate limit for resending: {time_remaining} minutes remaining for {email}")
             return Response(
                 {
                     "detail": f"Please wait {time_remaining} minutes before requesting another verification email",
@@ -578,9 +570,7 @@ def resend_verification(request):
         # Send verification email
         email_sent = send_verification_email(user)
 
-        return Response(
-            {"message": "Verification email sent", "email_sent": email_sent}
-        )
+        return Response({"message": "Verification email sent", "email_sent": email_sent})
     except User.DoesNotExist:
         # For security reasons, don't reveal that the email doesn't exist
         print(f"Email not found for resend verification: {email}")
@@ -590,144 +580,198 @@ def resend_verification(request):
             }
         )
 
+
 class ItemViewSet(viewsets.ModelViewSet):
-    """Optimized ItemViewSet with separate list and detail serializers"""
     pagination_class = OptimizedPagination
-    
+
+    def get_queryset(self):
+        """Get optimized queryset for items with caching"""
+        # Check if user is authenticated
+        is_authenticated = self.request.user.is_authenticated
+
+        # Generate cache key based on request parameters
+        request_path = self.request.path
+        query_params = self.request.query_params.urlencode()
+        cache_key = f"item_queryset:{request_path}:{query_params}"
+
+        # Try to get from cache first for anonymous users
+        if not is_authenticated:
+            cached_queryset = cache.get(cache_key)
+            if cached_queryset is not None:
+                return cached_queryset
+
+        # Define base queryset with optimizations
+        if self.action == "list":
+            # For list views, optimize with select_related and only fetch necessary fields
+            queryset = Item.objects.select_related("category").only(
+                "id",
+                "title",
+                "starting_price",
+                "current_price",
+                "start_date",
+                "end_date",
+                "is_active",
+                "category__name",
+                "category__code",
+            )
+
+            # Add annotations for bid count to avoid additional queries
+            queryset = queryset.annotate(
+                bid_count=Count("bids", distinct=True),
+                first_image_id=Subquery(
+                    ItemImage.objects.filter(item=OuterRef("pk")).order_by("order").values("id")[:1]
+                ),
+                first_image=Subquery(
+                    ItemImage.objects.filter(item=OuterRef("pk"))
+                    .order_by("order")
+                    .values("image")[:1]
+                ),
+            )
+
+            # Apply filters based on query parameters
+            category = self.request.query_params.get("category", None)
+            if category:
+                queryset = queryset.filter(category__code=category)
+
+            # Only show active auctions by default
+            show_past = self.request.query_params.get("show_past", "false").lower() == "true"
+            active_only = self.request.query_params.get("active", "true").lower() == "true"
+            if active_only and not show_past:
+                queryset = queryset.filter(is_active=True)
+
+            # Cache the queryset for anonymous users
+            if not is_authenticated:
+                cache.set(cache_key, queryset, MEDIUM_CACHE_TIMEOUT * 2)
+
+            return queryset
+        else:
+            # For detail views, include all related data
+            return Item.objects.select_related("category", "winner").prefetch_related(
+                "images", "bids", "bids__user"
+            )
+
     def get_serializer_class(self):
-        if self.action == 'list' or self.action == 'past_auctions':
+        if self.action == "list":
             return ItemListSerializer
         return ItemDetailSerializer
-    
+
     def get_permissions(self):
-        if self.action in ["list", "retrieve", "past_auctions"]:
+        if self.action in ["list", "retrieve"]:
             permission_classes = [AllowAny]
-        elif self.action in ["create", "update", "partial_update", "destroy", "add_images", "delete_images"]:
-            permission_classes = [IsAuthenticated, permissions.IsAdminUser]
         else:
             permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
 
-    def get_queryset(self):
-        queryset = Item.objects.all()
-        
-        # Filter by category if provided
-        category = self.request.query_params.get('category', None)
-        if category:
-            queryset = queryset.filter(category__code=category)
-            
-        # Filter by active status if provided
-        active = self.request.query_params.get('active', None)
-        if active is not None:
-            is_active = active.lower() == 'true'
-            if is_active:
-                # Active auctions that haven't ended yet
-                queryset = queryset.active()
-            else:
-                # Past auctions that have ended
-                queryset = queryset.ended()
-        
-        # Optimize query based on action
-        if self.action == 'list' or self.action == 'past_auctions':
-            # For list views, optimize by using our custom manager methods
-            queryset = queryset.with_bid_counts().with_first_image()
-        else:
-            # For detail view, fully prefetch related objects
-            queryset = queryset.with_full_relations()
-            
-        return queryset
-    
-        
-    def list(self, request, *args, **kwargs):
-        cache_key = get_item_list_cache_key(request)
-        cached_data = cache.get(cache_key)
-        
-        if cached_data:
-            return Response(cached_data)
-        
-        response = super().list(request, *args, **kwargs)
-        cache.set(cache_key, response.data, timeout=settings.ITEM_LIST_CACHE_TIMEOUT)
-        return response
-    
     def retrieve(self, request, *args, **kwargs):
-        item_id = kwargs.get('pk')
-        cache_key = get_item_detail_cache_key(item_id)
-        cached_data = cache.get(cache_key)
-        
-        if cached_data:
-            return Response(cached_data)
-        
-        response = super().retrieve(request, *args, **kwargs)
-        
-        # Only cache if this is a GET and successful
-        if request.method == 'GET' and response.status_code == 200:
-            cache.set(cache_key, response.data, timeout=settings.ITEM_DETAIL_CACHE_TIMEOUT)
-        
-        return response
-    
-    # Add cache invalidation to other methods
-    def update(self, request, *args, **kwargs):
-        item_id = kwargs.get('pk')
-        response = super().update(request, *args, **kwargs)
-        
-        # Clear specific caches
-        cache.delete(get_item_detail_cache_key(item_id))
-        pattern = f'item_list_*'
-        keys = cache.keys(pattern)
-        cache.delete_many(keys)
-        
-        return response
+        """Override retrieve to optimize and cache responses"""
+        # Simply return the standard response without caching
+        return super().retrieve(request, *args, **kwargs)
 
-    @action(detail=True, methods=["POST"], permission_classes=[IsAuthenticated])
+    def list(self, request, *args, **kwargs):
+        """Override list to optimize and cache responses"""
+        # Simply return the standard response without caching
+        return super().list(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated])
     def place_bid(self, request, pk=None):
-        """Optimized bid placement with proper transaction handling"""
+        """Place a bid on an item"""
         try:
-            with transaction.atomic():
-                # Get the item with select_for_update to prevent race conditions
-                item = Item.objects.select_for_update().get(pk=pk)
-                
-                # Basic validation
-                if not item.is_active or item.end_date < timezone.now():
-                    return Response({"detail": "This auction is not active or has ended"}, status=400)
-                
-                # Validate bid amount
-                amount = request.data.get('amount')
-                if not amount:
-                    return Response({"detail": "Bid amount is required"}, status=400)
-                
-                try:
-                    amount = float(amount)
-                except ValueError:
-                    return Response({"detail": "Invalid bid amount"}, status=400)
-                
-                if amount <= float(item.current_price):
-                    return Response({"detail": f"Bid must be higher than current price of ${item.current_price}"}, status=400)
-                
-                if amount < float(item.current_price) + 1:
-                    return Response({"detail": "Minimum bid increment is $1.00"}, status=400)
-                
-                # Validate against maximum bid (if there are previous bids)
-                highest_bid = item.bids.order_by('-amount').first()
-                if highest_bid and amount > highest_bid.amount * 2:
-                    return Response({"detail": f"Bid cannot exceed ${int(highest_bid.amount * 2)} (100% more than current bid)"}, status=400)
-                
-                # Create the bid
-                bid = Bid.objects.create(
-                    item=item,
-                    user=request.user,
-                    amount=amount
+            item = self.get_object()
+            
+            # Check if auction is active
+            if not item.is_active:
+                return Response(
+                    {"detail": "This auction is not active."},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
                 
-                # Update item price
-                item.current_price = amount
-                item.save(update_fields=['current_price'])
+            # Check if auction has ended
+            if item.end_date < timezone.now():
+                return Response(
+                    {"detail": "This auction has ended."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
                 
-                return Response(BidSerializer(bid).data, status=201)
+            # Get bid amount from request
+            amount = request.data.get("amount")
+            if not amount:
+                return Response(
+                    {"detail": "Bid amount is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
                 
-        except Item.DoesNotExist:
-            return Response({"detail": "Item not found"}, status=404)
+            # Convert to decimal
+            try:
+                amount = Decimal(str(amount))
+            except (ValueError, InvalidOperation):
+                return Response(
+                    {"detail": "Invalid bid amount."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+                
+            # Check if bid is higher than current price
+            if amount <= item.current_price:
+                return Response(
+                    {"detail": f"Bid must be higher than current price (${item.current_price})."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+                
+            # Check if bid is at least $1 higher than current price
+            if amount < item.current_price + 1:
+                return Response(
+                    {"detail": "Minimum bid increment is $1.00."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+                
+            # Create bid
+            bid = Bid.objects.create(
+                user=request.user,
+                item=item,
+                amount=amount,
+            )
+            
+            # Update item's current price
+            item.current_price = amount
+            item.save()
+            
+            # Record bid attempt
+            BidAttempt.objects.create(
+                user=request.user,
+                ip_address=request.META.get("REMOTE_ADDR", ""),
+                success=True,
+            )
+            
+            # Notify previous highest bidder if they exist and have notifications enabled
+            previous_highest_bid = Bid.objects.filter(item=item).exclude(id=bid.id).order_by("-amount").first()
+            if previous_highest_bid and previous_highest_bid.user != request.user:
+                if previous_highest_bid.user.outbid_notifications_enabled:
+                    send_outbid_notification(
+                        previous_highest_bid.user,
+                        item,
+                        previous_highest_bid.amount,
+                        amount,
+                    )
+            
+            return Response(
+                {
+                    "detail": "Bid placed successfully.",
+                    "bid": BidSerializer(bid).data,
+                    "current_price": str(item.current_price),
+                },
+                status=status.HTTP_201_CREATED,
+            )
         except Exception as e:
-            return Response({"detail": str(e)}, status=400)
+            # Record failed attempt
+            BidAttempt.objects.create(
+                user=request.user,
+                ip_address=request.META.get("REMOTE_ADDR", ""),
+                success=False,
+            )
+            
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 @api_view(["GET"])
@@ -761,9 +805,7 @@ class MessageViewSet(viewsets.ModelViewSet):
             return Message.objects.all()
         else:
             # Regular users can only see their conversations
-            return Message.objects.filter(
-                models.Q(sender=user) | models.Q(receiver=user)
-            )
+            return Message.objects.filter(models.Q(sender=user) | models.Q(receiver=user))
 
     def create(self, request, *args, **kwargs):
         """Handle message creation with improved debugging and error handling"""
@@ -781,11 +823,7 @@ class MessageViewSet(viewsets.ModelViewSet):
             message_data["sender"] = user.id
 
             # Handle receiver properly based on user type
-            if (
-                user.is_staff
-                and "receiver" in request.data
-                and request.data["receiver"]
-            ):
+            if user.is_staff and "receiver" in request.data and request.data["receiver"]:
                 # Admin sending to specific user - use the provided receiver
                 receiver_id = request.data["receiver"]
                 print(f"Admin sending message to user ID: {receiver_id}")
@@ -833,9 +871,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         user = request.user
         if user.is_staff:
             # For admins, get all unique users who have sent messages
-            senders = User.objects.filter(
-                sent_messages__receiver__isnull=True
-            ).distinct()
+            senders = User.objects.filter(sent_messages__receiver__isnull=True).distinct()
 
             # Get latest message for each sender
             conversations = []
@@ -893,9 +929,9 @@ class MessageViewSet(viewsets.ModelViewSet):
 
         # Mark messages as read
         if not user.is_staff:
-            Message.objects.filter(
-                sender__is_staff=True, receiver=user, is_read=False
-            ).update(is_read=True)
+            Message.objects.filter(sender__is_staff=True, receiver=user, is_read=False).update(
+                is_read=True
+            )
 
         # Get messages
         messages = Message.objects.filter(
@@ -919,9 +955,9 @@ class MessageViewSet(viewsets.ModelViewSet):
             user = User.objects.get(id=user_id)
 
             # Mark messages as read
-            Message.objects.filter(
-                sender=user, receiver__isnull=True, is_read=False
-            ).update(is_read=True)
+            Message.objects.filter(sender=user, receiver__isnull=True, is_read=False).update(
+                is_read=True
+            )
 
             # Get messages
             messages = Message.objects.filter(
@@ -931,9 +967,7 @@ class MessageViewSet(viewsets.ModelViewSet):
 
             return Response(MessageSerializer(messages, many=True).data)
         except User.DoesNotExist:
-            return Response(
-                {"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND
-            )
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -1002,9 +1036,7 @@ def debug_send_message(request):
         receiver_id = request.data.get("receiver")
 
         if not content:
-            return Response(
-                {"detail": "Content is required"}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"detail": "Content is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Handle receiver properly
         receiver = None
@@ -1012,21 +1044,15 @@ def debug_send_message(request):
             try:
                 receiver = User.objects.get(id=receiver_id)
             except User.DoesNotExist:
-                return Response(
-                    {"detail": "Receiver not found"}, status=status.HTTP_404_NOT_FOUND
-                )
+                return Response({"detail": "Receiver not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # Create message with proper receiver
-        message = Message.objects.create(
-            sender=request.user, content=content, receiver=receiver
-        )
+        message = Message.objects.create(sender=request.user, content=content, receiver=receiver)
 
         # Return full serialized message
         return Response(MessageSerializer(message).data)
     except Exception as e:
-        return Response(
-            {"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["GET"])
@@ -1070,9 +1096,9 @@ def user_won_items(request, user_id):
         user = User.objects.get(id=user_id)
 
         # Find items won by this user
-        won_items = Item.objects.filter(
-            winner=user, end_date__lt=timezone.now()
-        ).order_by("-end_date")
+        won_items = Item.objects.filter(winner=user, end_date__lt=timezone.now()).order_by(
+            "-end_date"
+        )
 
         # Format the response
         items_data = []
@@ -1119,9 +1145,7 @@ def contact_winners(request):
         item_ids = data.get("item_ids", [])
 
         if not item_ids:
-            return Response(
-                {"detail": "No items selected"}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"detail": "No items selected"}, status=status.HTTP_400_BAD_REQUEST)
 
         contacted = 0
         for item_id in item_ids:
@@ -1149,9 +1173,7 @@ def contact_winners(request):
 
         return Response({"contacted": contacted})
     except Exception as e:
-        return Response(
-            {"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def send_winner_notification(item):
@@ -1313,12 +1335,198 @@ def mark_winners(request):
             )
         except Exception as e:
             print(f"Error assigning winner: {str(e)}")
-            return Response(
-                {"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     except Exception as e:
         print(f"Error in mark_winners: {str(e)}")
-        return Response(
-            {"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({"detail": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CategorySpecificItemViewSet(ItemViewSet):
+    """Base class for category-specific item viewsets"""
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.category_code:
+            queryset = queryset.filter(category__code=self.category_code)
+        return queryset
+        
+    # Ensure unauthenticated users can access item details
+    def get_permissions(self):
+        # Always allow list and retrieve operations
+        if self.action in ["list", "retrieve"]:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsAuthenticated]
+        return [permission() for permission in permission_classes]
+
+
+class KnifeItemViewSet(CategorySpecificItemViewSet):
+    """Viewset for knife items only"""
+    category_code = "KNIFE"
+
+
+class PaintItemViewSet(CategorySpecificItemViewSet):
+    """Viewset for paint items only"""
+    category_code = "PAINT"
+
+
+class MiscItemViewSet(CategorySpecificItemViewSet):
+    """Viewset for miscellaneous items only"""
+    category_code = "MISC"
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def debug_item_4(request):
+    """Special debug endpoint to troubleshoot item ID 4"""
+    try:
+        # Try to get the item with all serializer fields expanded
+        item = Item.objects.filter(id=4).first()
+        if not item:
+            return Response({
+                "status": "error",
+                "message": "Item with ID 4 not found in database",
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check and report category information
+        category_info = {}
+        if item.category:
+            category_info = {
+                "id": item.category.id,
+                "name": item.category.name,
+                "code": item.category.code,
+                "exists": True
+            }
+        else:
+            category_info = {"exists": False}
+        
+        # Get images
+        images = []
+        for img in item.images.all():
+            try:
+                images.append({
+                    "id": img.id,
+                    "image_url": img.image.url if img.image else None,
+                    "order": img.order,
+                })
+            except Exception as img_error:
+                images.append({
+                    "id": img.id,
+                    "error": str(img_error),
+                    "order": img.order,
+                })
+        
+        # Get bids
+        bids = []
+        for bid in item.bids.all():
+            bids.append({
+                "id": bid.id,
+                "amount": float(bid.amount),
+                "created_at": bid.created_at.isoformat(),
+                "user_id": bid.user.id if bid.user else None,
+                "user_email": bid.user.email if bid.user else None,
+            })
+        
+        # Create manually constructed response
+        response_data = {
+            "status": "success",
+            "item": {
+                "id": item.id,
+                "title": item.title,
+                "description": item.description,
+                "starting_price": float(item.starting_price),
+                "current_price": float(item.current_price),
+                "start_date": item.start_date.isoformat(),
+                "end_date": item.end_date.isoformat(),
+                "is_active": item.is_active,
+                "category": category_info,
+                "images": images,
+                "bids": bids,
+                "image_count": len(images),
+                "bid_count": len(bids),
+                "youtube_url": item.youtube_url,
+            }
+        }
+        
+        # Try serializing with the regular serializer too
+        try:
+            serializer = ItemDetailSerializer(item)
+            response_data["serialized_item"] = serializer.data
+        except Exception as serializer_error:
+            response_data["serializer_error"] = {
+                "message": str(serializer_error),
+                "type": type(serializer_error).__name__
+            }
+        
+        return Response(response_data)
+    except Exception as e:
+        import traceback
+        return Response({
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc(),
+            "error_type": type(e).__name__,
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def debug_api_connection(request):
+    """Debug endpoint to test API connectivity and configuration"""
+    try:
+        # Get some basic stats to verify database access
+        item_count = Item.objects.count()
+        category_count = Category.objects.count()
+        user_count = User.objects.count()
+        
+        # Try to fetch item with ID 4 specifically
+        item_4 = None
+        try:
+            item_4 = Item.objects.get(id=4)
+            item_4_data = {
+                "id": item_4.id,
+                "title": item_4.title,
+                "category": item_4.category.name,
+                "category_code": item_4.category.code,
+                "current_price": float(item_4.current_price),
+                "end_date": item_4.end_date.isoformat(),
+            }
+        except Item.DoesNotExist:
+            item_4_data = "Not found"
+        
+        # Return detailed information
+        return Response({
+            "status": "connected",
+            "request_info": {
+                "user": request.user.username if request.user.is_authenticated else "anonymous",
+                "method": request.method,
+                "path": request.path,
+            },
+            "database_info": {
+                "item_count": item_count,
+                "category_count": category_count,
+                "user_count": user_count,
+                "item_4": item_4_data,
+            },
+            "server_time": timezone.now().isoformat(),
+            "debug_mode": settings.DEBUG,
+            "allowed_hosts": settings.ALLOWED_HOSTS,
+            "cors_config": {
+                "allowed_origins": getattr(settings, "CORS_ALLOWED_ORIGINS", []),
+                "allow_all_origins": getattr(settings, "CORS_ALLOW_ALL_ORIGINS", False),
+                "allow_credentials": getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
+            },
+            "csrf_config": {
+                "cookie_name": settings.CSRF_COOKIE_NAME,
+                "cookie_secure": settings.CSRF_COOKIE_SECURE,
+                "cookie_httponly": settings.CSRF_COOKIE_HTTPONLY,
+                "cookie_samesite": settings.CSRF_COOKIE_SAMESITE,
+                "trusted_origins": settings.CSRF_TRUSTED_ORIGINS,
+            }
+        })
+    except Exception as e:
+        return Response({
+            "status": "error",
+            "message": str(e),
+            "error_type": type(e).__name__,
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

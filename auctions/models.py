@@ -186,9 +186,9 @@ class Item(models.Model):
         max_digits=10, decimal_places=2, validators=[MinValueValidator(0.01)]
     )
     start_date = models.DateTimeField(default=timezone.now)
-    end_date = models.DateTimeField()
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    end_date = models.DateTimeField(db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     winner = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="won_items"
     )
@@ -203,6 +203,11 @@ class Item(models.Model):
             models.Index(fields=["is_active"]),
             models.Index(fields=["category"]),
             models.Index(fields=["end_date", "is_active"]),
+            models.Index(fields=["winner"]),
+            models.Index(fields=["current_price"]),
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["category", "end_date"]),
+            models.Index(fields=["category", "is_active", "end_date"]),
         ]
         ordering = ["-created_at"]  # Default ordering
 
@@ -239,6 +244,10 @@ class Bid(models.Model):
 
     class Meta:
         ordering = ["-amount"]
+        indexes = [
+            models.Index(fields=["item", "amount"]),
+            models.Index(fields=["user", "created_at"]),
+        ]
 
     def __str__(self):
         # return f"{user_email} bid ${self.amount} on {self.item.title}" #this made docker undefined
@@ -271,6 +280,10 @@ class Message(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["sender", "receiver", "is_read"]),
+            models.Index(fields=["created_at"]),
+        ]
 
     def __str__(self):
         return f"From {self.sender} to {self.receiver or 'Admin'} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"

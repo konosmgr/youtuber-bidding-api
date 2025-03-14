@@ -93,6 +93,7 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    "django.middleware.cache.UpdateCacheMiddleware",
     "auctions.middleware.TimingMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",  # For admin static files
@@ -104,6 +105,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "csp.middleware.CSPMiddleware",
+    "django.middleware.cache.FetchFromCacheMiddleware",
 ]
 
 # URLs
@@ -129,6 +131,30 @@ TEMPLATES = [
         },
     },
 ]
+
+# Cache settings - using Redis for production and memory for development
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/1"),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SOCKET_CONNECT_TIMEOUT": 1,
+            "SOCKET_TIMEOUT": 1,
+            "IGNORE_EXCEPTIONS": True,
+            "MAX_CONNECTIONS": 100,
+            "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
+            "CONNECTION_POOL_KWARGS": {"max_connections": 100},
+        },
+        "KEY_PREFIX": "youtuber_bid_",
+        "TIMEOUT": 1200,
+    }
+}
+
+# Session settings - using Redis for better performance
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+SESSION_CACHE_ALIAS = "default"
+SESSION_COOKIE_AGE = 1209600
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -184,11 +210,15 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB"),
-        "USER": os.environ.get("POSTGRES_USER"),
+        "NAME": os.environ.get("POSTGRES_DB", "konosmgr"),
+        "USER": os.environ.get("POSTGRES_USER", "konosmgr"),
         "PASSWORD": os.environ.get("POSTGRES_PASSWORD"),
-        "HOST": os.environ.get("POSTGRES_HOST"),
-        "PORT": os.environ.get("POSTGRES_PORT"),
+        "HOST": os.environ.get("POSTGRES_HOST", "konosmgr.com"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        "CONN_MAX_AGE": 60,  # Keep connections alive for 60 seconds
+        "OPTIONS": {
+            "connect_timeout": 10,
+        },
     }
 }
 
@@ -294,13 +324,15 @@ CSP_IMG_SRC = (
     "'self'",
     "data:",
     "https://*.s3.amazonaws.com",
-    "https://s3.konosmgr.com",  # Allow MinIO images
+    "https://*.s3.us-east-2.amazonaws.com",  # Allow Amazon S3 images
+    "https://s3.konosmgr.com",  # Keep MinIO for backward compatibility
 )
 CSP_CONNECT_SRC = (
     "'self'",
     "https://accounts.google.com",
     "https://*.s3.amazonaws.com",
-    "https://s3.konosmgr.com",  # Allow MinIO connections
+    "https://*.s3.us-east-2.amazonaws.com",  # Allow Amazon S3 connections
+    "https://s3.konosmgr.com",  # Keep MinIO for backward compatibility
 )
 CSP_FONT_SRC = (
     "'self'",
@@ -311,32 +343,13 @@ CSP_FRAME_SRC = (
     "https://accounts.google.com",
 )
 
+# Cache timeouts
+ITEM_LIST_CACHE_TIMEOUT = 60 * 10  # 10 minutes for item lists
+ITEM_DETAIL_CACHE_TIMEOUT = 60 * 5  # 5 minutes for item details
+MEDIUM_CACHE_TIMEOUT = 60 * 10  # 10 minutes
+SHORT_CACHE_TIMEOUT = 60 * 2  # 2 minutes
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/0"),
-        "TIMEOUT": 300,  # 5 minutes default timeout
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        },
-    }
-}
-
-
-# Cache timeouts for different types of data
-CATEGORY_CACHE_TIMEOUT = 60 * 60 * 24  # 24 hours for categories
-ITEM_LIST_CACHE_TIMEOUT = 60 * 5  # 5 minutes for item lists
-ITEM_DETAIL_CACHE_TIMEOUT = 60 * 2  # 2 minutes for item details
-
-
-# Database connection pooling
-DATABASES = {
-    "default": {
-        # Your existing DB settings here
-        "CONN_MAX_AGE": 60,  # Keep connections alive for 60 seconds
-        "OPTIONS": {
-            "connect_timeout": 10,
-        },
-    }
-}
+# Cache middleware settings
+CACHE_MIDDLEWARE_ALIAS = "default"
+CACHE_MIDDLEWARE_SECONDS = 600
+CACHE_MIDDLEWARE_KEY_PREFIX = "youtuber_bid_middleware"

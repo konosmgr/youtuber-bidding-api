@@ -38,7 +38,13 @@ psycopg2-binary = "^2.9.9"
 celery = "^5.4.0"
 django-celery-beat = "^2.7.0"
 redis = "5.0.1"
+<<<<<<< HEAD
 django-silk = "^5.1.0"
+=======
+django-redis = "^5.4.0"
+hiredis = "^2.3.2"
+django-debug-toolbar = "^4.3.0"  # Use the latest version available
+>>>>>>> 02a5e0e (unfixable trash frontend)
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.1"

@@ -9,6 +9,11 @@ router.register(r"categories", views.CategoryViewSet)
 router.register(r"users", views.UserViewSet)
 router.register(r"messages", views.MessageViewSet, basename="messages")
 
+# Add category-specific item viewsets
+router.register(r"knife", views.KnifeItemViewSet, basename="knife-items")
+router.register(r"paint", views.PaintItemViewSet, basename="paint-items")  
+router.register(r"misc", views.MiscItemViewSet, basename="misc-items")
+
 urlpatterns = [
     path("", include(router.urls)),
     path("csrf/", views.get_csrf_token, name="csrf"),
@@ -24,6 +29,8 @@ urlpatterns = [
         name="user-chat",
     ),
     path("debug-message/", views.debug_send_message, name="debug_message"),
+    path("debug/", views.debug_api_connection, name="debug_api"),
+    path("debug/item4/", views.debug_item_4, name="debug_item_4"),
     path("analytics/overview/", views_analytics.analytics_overview, name="analytics_overview"),
     path("analytics/users/", views_analytics.user_metrics, name="user_metrics"),
     path("analytics/auctions/", views_analytics.auction_metrics, name="auction_metrics"),
