@@ -27,27 +27,39 @@ def recent_winners(request):
         thirty_days_ago = timezone.now() - timedelta(days=30)
 
         # Get items with winner assigned and ended in last 30 days
+        # Using values() for a more efficient query
         recent_items = (
             Item.objects.filter(
                 winner__isnull=False, end_date__lt=timezone.now(), end_date__gt=thirty_days_ago
             )
             .select_related("winner")
             .order_by("-end_date")
+            .values(
+                "id",
+                "title",
+                "end_date",
+                "winner_contacted",
+                "current_price",
+                "winner_id",
+                "winner__email",
+                "winner__full_name",
+                "winner__username",
+            )
         )
 
-        # Serialize response
+        # Transform to the expected response format
         data = []
         for item in recent_items:
             data.append(
                 {
-                    "item_id": item.id,
-                    "title": item.title,
-                    "end_date": item.end_date,
-                    "winner_id": item.winner.id,
-                    "winner_email": item.winner.email,
-                    "winner_name": item.winner.full_name or item.winner.username,
-                    "contacted": item.winner_contacted,
-                    "final_price": float(item.current_price),
+                    "item_id": item["id"],
+                    "title": item["title"],
+                    "end_date": item["end_date"],
+                    "winner_id": item["winner_id"],
+                    "winner_email": item["winner__email"],
+                    "winner_name": item["winner__full_name"] or item["winner__username"],
+                    "contacted": item["winner_contacted"],
+                    "final_price": float(item["current_price"]),
                 }
             )
 
@@ -71,8 +83,13 @@ def user_won_items(request, user_id):
                 {"detail": f"User with ID {user_id} not found"}, status=status.HTTP_404_NOT_FOUND
             )
 
-        # Get items won by this user
-        won_items = Item.objects.filter(winner=user).order_by("-end_date")
+        # Get items won by this user with optimized query
+        won_items = (
+            Item.objects.filter(winner=user)
+            .select_related("category", "winner")
+            .prefetch_related("images", "bids")
+            .order_by("-end_date")
+        )
 
         # Serialize items
         serializer = ItemSerializer(won_items, many=True)
@@ -89,25 +106,16 @@ def user_won_items(request, user_id):
 def winner_ids(request):
     """Get list of user IDs who have won at least one auction"""
     try:
-        # Get unique winner IDs
-        winner_ids = (
-            Item.objects.filter(winner__isnull=False).values_list("winner_id", flat=True).distinct()
+        # Get unique winner IDs with a more efficient query
+        # Use values() to fetch all required fields in a single query
+        winners = (
+            User.objects.filter(won_items__isnull=False)
+            .distinct()
+            .values("id", "email", "username", "full_name")
         )
 
-        # Get user details for each winner
-        winners = []
-        for user_id in winner_ids:
-            user = User.objects.get(id=user_id)
-            winners.append(
-                {
-                    "id": user.id,
-                    "email": user.email,
-                    "username": user.username,
-                    "full_name": user.full_name,
-                }
-            )
-
-        return Response(winners)
+        # The values() method returns dictionaries, so we can return them directly
+        return Response(list(winners))
 
     except Exception as e:
         logger.error(f"Error in winner_ids: {str(e)}")

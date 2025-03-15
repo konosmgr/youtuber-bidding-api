@@ -7,7 +7,6 @@ import os
 import time
 import traceback
 import uuid
-from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.core.paginator import Paginator
@@ -28,7 +27,9 @@ logger = logging.getLogger(__name__)
 class ItemViewSet(viewsets.ModelViewSet):
     """ViewSet for managing auction items"""
 
-    queryset = Item.objects.all().order_by("-created_at")
+    queryset = (
+        Item.objects.all().select_related("category", "winner").prefetch_related("images", "bids")
+    )
     serializer_class = ItemSerializer
 
     def get_permissions(self):
@@ -149,7 +150,11 @@ class ItemViewSet(viewsets.ModelViewSet):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def get_queryset(self):
-        queryset = Item.objects.all()
+        queryset = (
+            Item.objects.all()
+            .select_related("category", "winner")
+            .prefetch_related("images", "bids")
+        )
 
         # Filter by category if provided
         category = self.request.query_params.get("category", None)
@@ -297,10 +302,9 @@ class ItemViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Convert to Decimal instead of float to avoid warnings
             try:
-                amount = Decimal(str(amount))
-            except (ValueError, TypeError, InvalidOperation):
+                amount = float(amount)
+            except ValueError:
                 return Response(
                     {"detail": "Invalid bid amount"}, status=status.HTTP_400_BAD_REQUEST
                 )
@@ -313,15 +317,13 @@ class ItemViewSet(viewsets.ModelViewSet):
                 previous_highest_bid = item.bids.first()  # Due to ordering = ['-amount']
                 previous_highest_bidder = previous_highest_bid.user
 
-            # Convert item.current_price to Decimal for comparison
-            current_price = Decimal(str(item.current_price))
-            if amount <= current_price:
+            if amount <= float(item.current_price):
                 return Response(
                     {"detail": f"Bid must be higher than current price of ${item.current_price}"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if amount < current_price + Decimal("1.00"):
+            if amount < float(item.current_price) + 1:
                 return Response(
                     {"detail": "Minimum bid increment is $1.00"},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -385,8 +387,13 @@ def past_auctions(request):
         # Get the current time
         now = timezone.now()
 
-        # Query past auctions with consistent ordering
-        queryset = Item.objects.filter(end_date__lt=now).order_by("-end_date")
+        # Query past auctions with optimized queryset
+        queryset = (
+            Item.objects.filter(end_date__lt=now)
+            .order_by("-end_date")
+            .select_related("category", "winner")
+            .prefetch_related("images", "bids")
+        )
 
         # Apply pagination
         paginator = Paginator(queryset, page_size)
