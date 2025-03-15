@@ -16,11 +16,12 @@ from django.utils import timezone
 from rest_framework import pagination, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.request import Request
 from rest_framework.response import Response
 
 from auctions.models import Bid, BidAttempt, Item, ItemImage, User
 from auctions.serializers import BidSerializer, ItemSerializer
-from auctions.views.utils import check_bid_rate_limit, send_outbid_notification
+from auctions.views.utils import check_bid_rate_limit, log_error, send_outbid_notification
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -153,6 +154,9 @@ class ItemViewSet(viewsets.ModelViewSet):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     def get_queryset(self):
+        # Type annotation for DRF request
+        request = self.request  # type: Request
+
         queryset = (
             Item.objects.all()
             .select_related("category", "winner")
@@ -160,12 +164,12 @@ class ItemViewSet(viewsets.ModelViewSet):
         )
 
         # Filter by category if provided
-        category = self.request.query_params.get("category", None)
+        category = request.query_params.get("category", None)
         if category:
             queryset = queryset.filter(category__code=category)
 
         # Filter by active status if provided
-        active = self.request.query_params.get("active", None)
+        active = request.query_params.get("active", None)
         if active is not None:
             is_active = active.lower() == "true"
             if is_active:
@@ -186,7 +190,7 @@ class ItemViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["POST"], permission_classes=[IsAuthenticated])
     def add_images(self, request, pk=None):
-        """Add new images to an existing item"""
+        """Add new images to an existing item - optimized for better performance"""
         try:
             item = self.get_object()
             images = request.FILES.getlist("images")
@@ -198,9 +202,10 @@ class ItemViewSet(viewsets.ModelViewSet):
 
             logger.info(f"Adding {len(images)} images to item {item.id}")
 
-            # Import boto3
+            # Import dependencies
             import boto3
             from django.conf import settings
+            from django.db import transaction
 
             # Set up S3 client
             s3 = boto3.client(
@@ -211,41 +216,68 @@ class ItemViewSet(viewsets.ModelViewSet):
             )
 
             created_images = []
-            for idx, image in enumerate(images):
-                try:
-                    # Generate a unique filename
-                    file_extension = os.path.splitext(image.name)[1].lower()
-                    unique_name = f"{uuid.uuid4().hex}{file_extension}"
-                    s3_key = f"images/{unique_name}"
+            errors = []
 
-                    # Read file content and upload directly to S3
-                    file_content = image.read()
-                    s3.put_object(
-                        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                        Key=s3_key,
-                        Body=file_content,
-                        ContentType=image.content_type or "image/jpeg",
-                    )
+            # Process images in a transaction for atomicity
+            with transaction.atomic():
+                for idx, image in enumerate(images):
+                    try:
+                        # Validate image type early to fail fast
+                        if not image.content_type or not image.content_type.startswith("image/"):
+                            errors.append(f"File {image.name} is not a valid image")
+                            continue
 
-                    # Create database record with the S3 path
-                    img = ItemImage.objects.create(item=item, order=idx)
+                        # Generate a unique filename
+                        file_extension = os.path.splitext(image.name)[1].lower()
+                        unique_name = f"{uuid.uuid4().hex}{file_extension}"
+                        s3_key = f"images/{unique_name}"
 
-                    # Set the image using a ContentFile
-                    # This resets the file pointer to the beginning
-                    image.seek(0)
-                    img.image.save(unique_name, ContentFile(image.read()), save=True)
+                        # Read file content only once
+                        image.seek(0)
+                        file_content = image.read()
 
-                    logger.info(f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}")
-                    created_images.append(img)
+                        # Upload to S3 with appropriate content type
+                        s3.put_object(
+                            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                            Key=s3_key,
+                            Body=file_content,
+                            ContentType=image.content_type or "image/jpeg",
+                            # Add caching headers for images
+                            CacheControl="max-age=31536000",  # 1 year
+                        )
 
-                except Exception as e:
-                    logger.error(f"Error processing image: {str(e)}")
-                    logger.error(traceback.format_exc())
+                        # Create database record with optimized save operation
+                        img = ItemImage(item=item, order=idx)
+                        img.save()  # Save once to get ID
 
-            return Response(
-                {"message": f"Successfully uploaded {len(created_images)} images"},
-                status=status.HTTP_201_CREATED,
-            )
+                        # Reset the file pointer and save image
+                        image.seek(0)
+                        img.image.save(unique_name, ContentFile(file_content), save=True)
+
+                        logger.info(
+                            f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}"
+                        )
+                        created_images.append(img)
+
+                    except Exception as e:
+                        logger.error(f"Error processing image: {str(e)}")
+                        logger.error(traceback.format_exc())
+                        errors.append(f"Error processing {image.name}: {str(e)}")
+
+            # Return appropriate response based on success/failure
+            if created_images:
+                response_data = {
+                    "message": f"Successfully uploaded {len(created_images)} images",
+                }
+                if errors:
+                    response_data["errors"] = ", ".join(errors)
+
+                return Response(response_data, status=status.HTTP_201_CREATED)
+            else:
+                return Response(
+                    {"detail": "Failed to upload any images", "errors": ", ".join(errors)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         except Exception as e:
             logger.error(f"Overall exception in add_images: {str(e)}")
@@ -392,38 +424,72 @@ class ItemViewSet(viewsets.ModelViewSet):
             if previous_highest_bidder and previous_highest_bidder != user:
                 # Check if previous highest bidder has outbid notifications enabled
                 if previous_highest_bidder.outbid_notifications_enabled:
+                    # Only access amount if previous_highest_bid is not None
+                    prev_amount = previous_highest_bid.amount if previous_highest_bid else 0
                     send_outbid_notification(
                         previous_highest_bidder,
                         item,
-                        previous_highest_bid.amount,
+                        prev_amount,
                         amount,
                     )
 
             return Response(BidSerializer(bid).data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            logger.error(f"Bid error: {str(e)}")
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            # Use the new error logging function
+            error_id = log_error(
+                "place_bid",
+                e,
+                {
+                    "user_id": getattr(request.user, "id", None),
+                    "item_id": pk,
+                    "amount": request.data.get("amount") if hasattr(request, "data") else None,
+                },
+            )
+
+            # Return a user-friendly error with the ID for support reference
+            return Response(
+                {
+                    "detail": f"An error occurred while processing your bid. Error ID: {error_id}",
+                    "error_id": error_id,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def past_auctions(request):
-    """Return past (ended) auctions with pagination"""
+    """Return past (ended) auctions with pagination and caching"""
     try:
         # Get pagination parameters
         page = int(request.query_params.get("page", 1))
         page_size = int(request.query_params.get("page_size", 10))
 
+        # Generate cache key based on pagination parameters
+        cache_key = f"past_auctions_p{page}_s{page_size}"
+
+        # Try to get from cache first
+        from django.core.cache import cache
+
+        cached_response = cache.get(cache_key)
+        if cached_response:
+            return cached_response
+
         # Get the current time
         now = timezone.now()
 
-        # Query past auctions with optimized queryset
+        # Optimize query with annotations and prefetching
         queryset = (
             Item.objects.filter(end_date__lt=now)
             .order_by("-end_date")
             .select_related("category", "winner")
             .prefetch_related("images", "bids")
+            .annotate(
+                image_count=Count("images", distinct=True),
+                bid_count=Count("bids", distinct=True),
+                highest_bid=Max("bids__amount"),
+            )
         )
 
         # Apply pagination
@@ -439,10 +505,15 @@ def past_auctions(request):
         # Serialize the results
         serializer = ItemSerializer(items, many=True)
 
-        # Return paginated response
-        return Response(
+        # Prepare response
+        response = Response(
             {"items": serializer.data, "page": page, "pages": total_pages, "count": paginator.count}
         )
+
+        # Cache for 5 minutes - adjust based on your needs
+        cache.set(cache_key, response, 300)
+
+        return response
 
     except Exception as e:
         logger.error(f"Error in past_auctions: {str(e)}")

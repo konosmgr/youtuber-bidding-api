@@ -3,6 +3,7 @@ Utility functions for the auctions views.
 """
 
 import logging
+import traceback
 import uuid
 from datetime import timedelta
 
@@ -22,6 +23,40 @@ MAX_LOGIN_ATTEMPTS = 5  # Max attempts per 15 minutes
 LOGIN_ATTEMPT_PERIOD = 15 * 60  # 15 minutes in seconds
 MAX_BID_ATTEMPTS = 10  # Max bid attempts per minute
 BID_ATTEMPT_PERIOD = 60  # 1 minute in seconds
+
+
+def log_error(function_name, error, context=None):
+    """
+    Enhanced error logging utility.
+
+    This function provides a standardized way to log errors with context
+    throughout the application, making debugging easier.
+
+    Args:
+        function_name: Name of the function where the error occurred
+        error: The exception object
+        context: Optional dict with additional context information
+    """
+    error_id = str(uuid.uuid4())[:8]  # Generate a short ID for this error
+
+    error_data = {
+        "error_id": error_id,
+        "function": function_name,
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "traceback": traceback.format_exc(),
+    }
+
+    # Add any additional context
+    if context:
+        error_data.update(context)
+
+    # Log the error with the ID for correlation
+    logger.error(f"[{error_id}] Error in {function_name}: {str(error)}", extra=error_data)
+
+    # In production, you could send this to a monitoring service
+
+    return error_id  # Return the ID so it can be shown to the user for support
 
 
 def verify_recaptcha(recaptcha_response):

@@ -234,3 +234,12 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {"anon": "60/minute", "user": "120/minute"},
 }
+
+# Cache settings - simple in-memory cache for development
+# For production, you'd want to use Redis or Memcached
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "unique-youtuber-bidding",
+    }
+}
