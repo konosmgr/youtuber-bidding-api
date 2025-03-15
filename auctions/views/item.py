@@ -9,7 +9,9 @@ import traceback
 import uuid
 
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
+from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -188,6 +190,18 @@ class ItemViewSet(viewsets.ModelViewSet):
 
             logger.info(f"Adding {len(images)} images to item {item.id}")
 
+            # Import boto3
+            import boto3
+            from django.conf import settings
+
+            # Set up S3 client
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=settings.AWS_S3_ENDPOINT_URL,
+                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            )
+
             created_images = []
             for idx, image in enumerate(images):
                 try:
@@ -196,14 +210,24 @@ class ItemViewSet(viewsets.ModelViewSet):
                     unique_name = f"{uuid.uuid4().hex}{file_extension}"
                     s3_key = f"images/{unique_name}"
 
-                    # Create database record
+                    # Read file content and upload directly to S3
+                    file_content = image.read()
+                    s3.put_object(
+                        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                        Key=s3_key,
+                        Body=file_content,
+                        ContentType=image.content_type or "image/jpeg",
+                    )
+
+                    # Create database record with the S3 path
                     img = ItemImage.objects.create(item=item, order=idx)
 
-                    # Save the image
-                    img.image = image
-                    img.save()
+                    # Set the image using a ContentFile
+                    # This resets the file pointer to the beginning
+                    image.seek(0)
+                    img.image.save(unique_name, ContentFile(image.read()), save=True)
 
-                    logger.info(f"Saved image {img.id} for item {item.id}")
+                    logger.info(f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}")
                     created_images.append(img)
 
                 except Exception as e:
