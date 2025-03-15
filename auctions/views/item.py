@@ -26,6 +26,26 @@ from auctions.views.utils import check_bid_rate_limit, log_error, send_outbid_no
 # Setup logger
 logger = logging.getLogger(__name__)
 
+# Cache timeout - use the value from settings or default to 1 hour
+CACHE_TTL = getattr(settings, 'CACHE_TTL', 60 * 60)
+
+# Define shorter cache times for volatile data (5 minutes)
+SHORT_CACHE_TTL = 60 * 5
+
+# OPTIMIZATION NOTES:
+# 1. Database Optimizations:
+#    - Used select_related and prefetch_related to reduce N+1 query problems
+#    - Added specific query optimizations based on the view action (list vs retrieve)
+#    - Used annotations for counts to avoid additional queries
+#
+# 2. Caching Strategy:
+#    - Implemented Redis caching for list and detail views
+#    - Used shorter cache times for list views (more volatile)
+#    - Longer cache times for detail views (less volatile)
+#    - Proper cache invalidation when items are modified
+#
+# 3. Image Processing:
+#    - Fixed issue with image uploads during item creation
 
 class ItemViewSet(viewsets.ModelViewSet):
     """ViewSet for managing auction items"""
@@ -117,10 +137,63 @@ class ItemViewSet(viewsets.ModelViewSet):
             logger.info(f"Time to validate data: {validation_time:.4f}s")
 
             save_start = time.time()
-            self.perform_create(serializer)
+            item = self.perform_create(serializer)
             save_time = time.time() - save_start
             logger.info(f"Time to save item: {save_time:.4f}s")
 
+            # Process images if any are present
+            image_processing_start = time.time()
+            if images:
+                import boto3
+                from django.conf import settings
+                from django.db import transaction
+
+                # Set up S3 client
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=settings.AWS_S3_ENDPOINT_URL,
+                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+                )
+
+                created_images = []
+                with transaction.atomic():
+                    for idx, image in enumerate(images):
+                        try:
+                            # Validate image type early to fail fast
+                            if not image.content_type or not image.content_type.startswith(
+                                "image/"
+                            ):
+                                logger.warning(f"File {image.name} is not a valid image")
+                                continue
+
+                            # Generate a unique filename
+                            file_extension = os.path.splitext(image.name)[1].lower()
+                            unique_name = f"{uuid.uuid4().hex}{file_extension}"
+
+                            # Create database record
+                            img = ItemImage(item=item, order=idx)
+                            img.save()  # Save once to get ID
+
+                            # Read file content and save image
+                            image.seek(0)
+                            file_content = image.read()
+                            img.image.save(unique_name, ContentFile(file_content), save=True)
+
+                            logger.info(
+                                f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}"
+                            )
+                            created_images.append(img)
+                        except Exception as e:
+                            logger.error(f"Error processing image: {str(e)}")
+
+                image_processing_time = time.time() - image_processing_start
+                logger.info(
+                    f"Time to process {len(created_images)} images: {image_processing_time:.4f}s"
+                )
+
+            # Refresh serializer with saved data including images
+            serializer = self.get_serializer(item)
             total_time = time.time() - start_time
             logger.info(f"Total time to create item: {total_time:.4f}s")
 

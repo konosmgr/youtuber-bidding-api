@@ -123,6 +123,30 @@ STATIC_ROOT = os.path.join(BASE_DIR, "static")
 # Media URL constructed in environment-specific settings
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
+# Cache settings
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.environ.get("REDIS_URL", "redis://redis:6379/1"),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "PARSER_CLASS": "redis.connection.HiredisParser",
+            "SOCKET_CONNECT_TIMEOUT": 5,
+            "SOCKET_TIMEOUT": 5,
+            "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
+            "IGNORE_EXCEPTIONS": True,
+        },
+        "KEY_PREFIX": "youtuber_bidding",
+    }
+}
+
+# Cache timeout (1 hour)
+CACHE_TTL = 60 * 60
+
+# Session settings
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+SESSION_CACHE_ALIAS = "default"
+
 # Database
 DATABASES = {
     "default": {

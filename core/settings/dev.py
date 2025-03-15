@@ -236,7 +236,7 @@ REST_FRAMEWORK = {
 }
 
 # Cache settings - simple in-memory cache for development
-# For production, you'd want to use Redis or Memcached
+# Redis is still configured, but we'll use locmem for simplicity in dev
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
