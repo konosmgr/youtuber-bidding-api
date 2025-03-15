@@ -11,9 +11,9 @@ import uuid
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
-from django.db.models import Q, QuerySet
+from django.db.models import Count, Max, Q, QuerySet
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import pagination, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -33,6 +33,7 @@ class ItemViewSet(viewsets.ModelViewSet):
         Item.objects.all().select_related("category", "winner").prefetch_related("images", "bids")
     )
     serializer_class = ItemSerializer
+    pagination_class = pagination.PageNumberPagination
 
     def get_permissions(self):
         if self.action in ["list", "retrieve"]:
@@ -174,6 +175,13 @@ class ItemViewSet(viewsets.ModelViewSet):
                 # Past auctions are those that have ended
                 queryset = queryset.filter(end_date__lte=timezone.now())
 
+        # Add annotations for counts to avoid N+1 queries
+        queryset = queryset.annotate(
+            image_count=Count("images", distinct=True),
+            bid_count=Count("bids", distinct=True),
+            highest_bid=Max("bids__amount"),
+        )
+
         return queryset
 
     @action(detail=True, methods=["POST"], permission_classes=[IsAuthenticated])
@@ -292,55 +300,54 @@ class ItemViewSet(viewsets.ModelViewSet):
             user = request.user
             ip_address = request.META.get("REMOTE_ADDR")
 
-            # Check rate limiting
+            # Check rate limiting first before any database operations
             if check_bid_rate_limit(user, ip_address):
                 return Response(
                     {"detail": "Too many bid attempts. Please try again later."},
                     status=status.HTTP_429_TOO_MANY_REQUESTS,
                 )
 
-            # Record bid attempt
-            bid_attempt = BidAttempt.objects.create(user=user, ip_address=ip_address, success=False)
-
-            item = self.get_object()
-
-            # Check if auction is active
-            if not item.is_active:
-                return Response(
-                    {"detail": "This auction is not active"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Check if auction has ended
-            if item.end_date < timezone.now():
-                return Response(
-                    {"detail": "This auction has ended"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Validate bid amount
-            amount = request.data.get("amount")
-            if not amount:
-                return Response(
-                    {"detail": "Bid amount is required"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
+            # Validate bid amount early to fail fast
             try:
-                amount = float(amount)
-            except ValueError:
+                amount = float(request.data.get("amount", 0))
+                if amount <= 0:
+                    return Response(
+                        {"detail": "Invalid bid amount"}, status=status.HTTP_400_BAD_REQUEST
+                    )
+            except (ValueError, TypeError):
                 return Response(
                     {"detail": "Invalid bid amount"}, status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Get current highest bid and bidder
+            # Get item with related objects in a single query
+            try:
+                item = Item.objects.select_related("category").get(pk=pk)
+            except Item.DoesNotExist:
+                return Response({"detail": "Item not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Record bid attempt
+            bid_attempt = BidAttempt.objects.create(user=user, ip_address=ip_address, success=False)
+
+            # Check if auction is active and hasn't ended
+            if not item.is_active or item.end_date < timezone.now():
+                return Response(
+                    {"detail": "This auction is not available for bidding"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Get previous highest bid in a single efficient query
             previous_highest_bid = None
             previous_highest_bidder = None
 
-            if item.bids.exists():
-                previous_highest_bid = item.bids.first()  # Due to ordering = ['-amount']
-                previous_highest_bidder = previous_highest_bid.user
+            # Fetch the highest bid with a single query
+            if Bid.objects.filter(item=item).exists():
+                previous_highest_bid = (
+                    Bid.objects.filter(item=item).order_by("-amount").select_related("user").first()
+                )
+                if previous_highest_bid:
+                    previous_highest_bidder = previous_highest_bid.user
 
+            # Validate amount against current price
             if amount <= float(item.current_price):
                 return Response(
                     {"detail": f"Bid must be higher than current price of ${item.current_price}"},
@@ -355,9 +362,8 @@ class ItemViewSet(viewsets.ModelViewSet):
 
             # Pre-validate the bid to catch ValidationError before creating
             max_allowed = 0
-            if item.bids.exists():
-                highest_bid = item.bids.first()
-                max_allowed = highest_bid.amount * 2
+            if previous_highest_bid:
+                max_allowed = previous_highest_bid.amount * 2
                 if amount > max_allowed:
                     return Response(
                         {
@@ -366,33 +372,34 @@ class ItemViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-            # Create new bid (now should be safe from ValidationError)
-            try:
+            # Create new bid and update item price in a transaction
+            from decimal import Decimal
+
+            from django.db import transaction
+
+            with transaction.atomic():
                 bid = Bid.objects.create(item=item, user=user, amount=amount)
 
-                # Update item price
-                item.current_price = amount
-                item.save()
+                # Update item price - convert to Decimal to avoid float precision issues
+                item.current_price = Decimal(str(amount))
+                item.save(update_fields=["current_price"])
 
                 # Mark bid attempt as successful
                 bid_attempt.success = True
-                bid_attempt.save()
+                bid_attempt.save(update_fields=["success"])
 
-                # Send outbid notification if there was a previous bidder
-                if previous_highest_bidder and previous_highest_bidder != user:
-                    # Check if previous highest bidder has outbid notifications enabled
-                    if previous_highest_bidder.outbid_notifications_enabled:
-                        send_outbid_notification(
-                            previous_highest_bidder,
-                            item,
-                            previous_highest_bid.amount,
-                            amount,
-                        )
+            # Send outbid notification if there was a previous bidder
+            if previous_highest_bidder and previous_highest_bidder != user:
+                # Check if previous highest bidder has outbid notifications enabled
+                if previous_highest_bidder.outbid_notifications_enabled:
+                    send_outbid_notification(
+                        previous_highest_bidder,
+                        item,
+                        previous_highest_bid.amount,
+                        amount,
+                    )
 
-                return Response(BidSerializer(bid).data, status=status.HTTP_201_CREATED)
-            except Exception as create_error:
-                logger.error(f"Error creating bid: {str(create_error)}")
-                return Response({"detail": str(create_error)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(BidSerializer(bid).data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
             logger.error(f"Bid error: {str(e)}")

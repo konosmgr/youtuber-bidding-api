@@ -150,6 +150,12 @@ LOGGING = {
             "handlers": ["console"],
             "level": "DEBUG",
         },
+        # Add specific database query logging
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "WARNING",  # Set to DEBUG to see all queries, WARNING for slow queries only
+            "propagate": False,
+        },
     },
 }
 
@@ -217,3 +223,14 @@ import socket
 
 hostname, _, ips = socket.gethostbyname_ex(socket.gethostname())
 INTERNAL_IPS += [".".join(ip.split(".")[:-1] + ["1"]) for ip in ips]
+
+# REST Framework settings
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {"anon": "60/minute", "user": "120/minute"},
+}

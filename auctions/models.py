@@ -135,6 +135,11 @@ class Item(models.Model):
         indexes = [
             models.Index(fields=["end_date"]),
             models.Index(fields=["is_active"]),
+            models.Index(fields=["category"]),
+            models.Index(fields=["created_at"]),
+            # Compound indexes for common filter combinations
+            models.Index(fields=["is_active", "end_date"]),
+            models.Index(fields=["category", "is_active"]),
         ]
 
     if TYPE_CHECKING:
