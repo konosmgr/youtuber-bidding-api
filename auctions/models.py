@@ -216,6 +216,11 @@ class ItemImage(models.Model):
     item = models.ForeignKey(Item, related_name="images", on_delete=models.CASCADE)
     image = models.ImageField(upload_to="images/")
     order = models.IntegerField(default=0)
+    # Store image dimensions for frontend optimization
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    # Store WebP version key
+    webp_key = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         ordering = ["order"]

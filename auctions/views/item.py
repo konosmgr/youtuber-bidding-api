@@ -2,17 +2,20 @@
 Item management views for the auctions app.
 """
 
+import io
 import logging
 import os
 import time
 import traceback
 import uuid
+from typing import Any, Dict, Tuple
 
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db.models import Count, Max, Q, QuerySet
 from django.utils import timezone
+from PIL import Image
 from rest_framework import pagination, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -31,6 +34,66 @@ CACHE_TTL = getattr(settings, "CACHE_TTL", 60 * 60)
 
 # Define shorter cache times for volatile data (5 minutes)
 SHORT_CACHE_TTL = 60 * 5
+
+# WebP quality setting
+WEBP_QUALITY = 85
+
+
+def process_image_with_webp(image_file, unique_name: str) -> Tuple[Dict[str, Any], bytes, bytes]:
+    """
+    Process an image file to create both original and WebP versions.
+
+    Args:
+        image_file: The uploaded image file
+        unique_name: Base filename without extension
+
+    Returns:
+        Tuple containing:
+            - dict with metadata (width, height)
+            - original file content bytes
+            - WebP file content bytes
+    """
+    try:
+        # Store original content
+        image_file.seek(0)
+        original_content = image_file.read()
+
+        # Open with PIL
+        image_file.seek(0)
+        img = Image.open(image_file)
+
+        # Get image dimensions
+        width, height = img.size
+
+        # Create WebP version
+        webp_buffer = io.BytesIO()
+        img.save(webp_buffer, "WEBP", quality=WEBP_QUALITY)
+        webp_content = webp_buffer.getvalue()
+
+        # Log size difference
+        original_size = len(original_content)
+        webp_size = len(webp_content)
+        reduction = 100 - (webp_size / original_size * 100) if original_size > 0 else 0
+        logger.info(
+            f"Image conversion: Original: {original_size} bytes, WebP: {webp_size} bytes, Reduction: {reduction:.1f}%"
+        )
+
+        return (
+            {
+                "width": width,
+                "height": height,
+            },
+            original_content,
+            webp_content,
+        )
+
+    except Exception as e:
+        logger.error(f"Error processing WebP conversion: {str(e)}")
+        # If there's an error, return the original content without WebP conversion
+        image_file.seek(0)
+        original_content = image_file.read()
+        return {}, original_content, b""
+
 
 # OPTIMIZATION NOTES:
 # 1. Database Optimizations:
@@ -173,14 +236,37 @@ class ItemViewSet(viewsets.ModelViewSet):
                             file_extension = os.path.splitext(image.name)[1].lower()
                             unique_name = f"{uuid.uuid4().hex}{file_extension}"
 
+                            # Create WebP version with same unique ID but different extension
+                            webp_name = f"{uuid.uuid4().hex}.webp"
+
+                            # Process image to get both original and WebP versions
+                            metadata, original_content, webp_content = process_image_with_webp(
+                                image, unique_name
+                            )
+
                             # Create database record
                             img = ItemImage(item=item, order=idx)
+                            if metadata:
+                                img.width = metadata.get("width", 0)
+                                img.height = metadata.get("height", 0)
                             img.save()  # Save once to get ID
 
-                            # Read file content and save image
-                            image.seek(0)
-                            file_content = image.read()
-                            img.image.save(unique_name, ContentFile(file_content), save=True)
+                            # Save original image
+                            img.image.save(unique_name, ContentFile(original_content), save=True)
+
+                            # Upload WebP version directly to S3 if conversion was successful
+                            if webp_content:
+                                s3_webp_key = f"images/{webp_name}"
+                                s3.put_object(
+                                    Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                                    Key=s3_webp_key,
+                                    Body=webp_content,
+                                    ContentType="image/webp",
+                                    CacheControl="max-age=31536000",  # 1 year
+                                )
+                                # Store the WebP S3 key for future retrieval
+                                img.webp_key = s3_webp_key
+                                img.save()
 
                             logger.info(
                                 f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}"
@@ -188,6 +274,7 @@ class ItemViewSet(viewsets.ModelViewSet):
                             created_images.append(img)
                         except Exception as e:
                             logger.error(f"Error processing image: {str(e)}")
+                            logger.error(traceback.format_exc())
 
                 image_processing_time = time.time() - image_processing_start
                 logger.info(
@@ -312,39 +399,46 @@ class ItemViewSet(viewsets.ModelViewSet):
                         # Generate a unique filename
                         file_extension = os.path.splitext(image.name)[1].lower()
                         unique_name = f"{uuid.uuid4().hex}{file_extension}"
-                        s3_key = f"images/{unique_name}"
+                        webp_name = f"{uuid.uuid4().hex}.webp"
 
-                        # Read file content only once
-                        image.seek(0)
-                        file_content = image.read()
-
-                        # Upload to S3 with appropriate content type
-                        s3.put_object(
-                            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
-                            Key=s3_key,
-                            Body=file_content,
-                            ContentType=image.content_type or "image/jpeg",
-                            # Add caching headers for images
-                            CacheControl="max-age=31536000",  # 1 year
+                        # Process image to get both original and WebP versions
+                        metadata, original_content, webp_content = process_image_with_webp(
+                            image, unique_name
                         )
 
                         # Create database record with optimized save operation
                         img = ItemImage(item=item, order=idx)
+                        if metadata:
+                            img.width = metadata.get("width", 0)
+                            img.height = metadata.get("height", 0)
                         img.save()  # Save once to get ID
 
-                        # Reset the file pointer and save image
-                        image.seek(0)
-                        img.image.save(unique_name, ContentFile(file_content), save=True)
+                        # Save original image
+                        img.image.save(unique_name, ContentFile(original_content), save=True)
+
+                        # Upload WebP version directly to S3 if conversion was successful
+                        if webp_content:
+                            s3_webp_key = f"images/{webp_name}"
+                            s3.put_object(
+                                Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                                Key=s3_webp_key,
+                                Body=webp_content,
+                                ContentType="image/webp",
+                                CacheControl="max-age=31536000",  # 1 year
+                            )
+                            # Store the WebP S3 key for future retrieval
+                            img.webp_key = s3_webp_key
+                            img.save()
 
                         logger.info(
-                            f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}"
+                            f"Saved image {img.pk} for item {item.pk}, path: {img.image.name}, with WebP version"
                         )
                         created_images.append(img)
 
                     except Exception as e:
                         logger.error(f"Error processing image: {str(e)}")
                         logger.error(traceback.format_exc())
-                        errors.append(f"Error processing {image.name}: {str(e)}")
+                        errors.append(f"Error processing image {image.name}: {str(e)}")
 
             # Return appropriate response based on success/failure
             if created_images:
