@@ -27,7 +27,7 @@ from auctions.views.utils import check_bid_rate_limit, log_error, send_outbid_no
 logger = logging.getLogger(__name__)
 
 # Cache timeout - use the value from settings or default to 1 hour
-CACHE_TTL = getattr(settings, 'CACHE_TTL', 60 * 60)
+CACHE_TTL = getattr(settings, "CACHE_TTL", 60 * 60)
 
 # Define shorter cache times for volatile data (5 minutes)
 SHORT_CACHE_TTL = 60 * 5
@@ -46,6 +46,7 @@ SHORT_CACHE_TTL = 60 * 5
 #
 # 3. Image Processing:
 #    - Fixed issue with image uploads during item creation
+
 
 class ItemViewSet(viewsets.ModelViewSet):
     """ViewSet for managing auction items"""
@@ -140,6 +141,7 @@ class ItemViewSet(viewsets.ModelViewSet):
             item = self.perform_create(serializer)
             save_time = time.time() - save_start
             logger.info(f"Time to save item: {save_time:.4f}s")
+            logger.info(f"Created item ID: {item.id}")
 
             # Process images if any are present
             image_processing_start = time.time()
@@ -193,11 +195,18 @@ class ItemViewSet(viewsets.ModelViewSet):
                 )
 
             # Refresh serializer with saved data including images
+            # Use a fresh serializer to ensure we have the latest data including the ID
             serializer = self.get_serializer(item)
+            response_data = serializer.data
+
+            # Ensure ID is included in the response
+            if "id" not in response_data:
+                response_data["id"] = item.id
+
             total_time = time.time() - start_time
             logger.info(f"Total time to create item: {total_time:.4f}s")
 
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(response_data, status=status.HTTP_201_CREATED)
         except Exception as e:
             error_time = time.time() - start_time
             logger.exception(f"Error creating item after {error_time:.4f}s: {str(e)}")
@@ -528,6 +537,11 @@ class ItemViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+    def perform_create(self, serializer):
+        """Override perform_create to return the created item"""
+        item = serializer.save()
+        return item
 
 
 @api_view(["GET"])
