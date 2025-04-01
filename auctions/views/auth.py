@@ -246,6 +246,11 @@ def google_auth(request):
         try:
             user = User.objects.get(google_id=google_id)
             logger.info(f"Found existing user with Google ID: {user.email}")
+            # Ensure their email is marked as verified
+            if not user.email_verified:
+                user.email_verified = True
+                user.save()
+                logger.info(f"Updated email_verified to True for existing user: {user.email}")
         except User.DoesNotExist:
             # Check if user with this email exists
             try:
@@ -253,9 +258,12 @@ def google_auth(request):
                 logger.info(f"Found existing user with email: {email}. Updating with Google ID.")
                 # Update user with Google ID
                 user.google_id = google_id
+                # Always set email_verified to True for Google users
+                user.email_verified = True
                 if not user.profile_picture and "picture" in id_info:
                     user.profile_picture = id_info["picture"]
                 user.save()
+                logger.info(f"Updated user {user.email} with Google ID and set email_verified=True")
             except User.DoesNotExist:
                 # Create new user
                 logger.info(f"Creating new user for: {email}")
@@ -271,7 +279,7 @@ def google_auth(request):
                         username=username,
                         email=email,
                         google_id=google_id,
-                        email_verified=True,
+                        email_verified=True,  # Always set to True for Google users
                         is_active=True,
                     )
 
@@ -283,7 +291,7 @@ def google_auth(request):
                         user.profile_picture = id_info["picture"]
 
                     user.save()
-                    logger.info(f"Created new user: {username}")
+                    logger.info(f"Created new user with email_verified=True: {username}")
                 except Exception as create_error:
                     logger.error(f"Error creating user: {str(create_error)}", exc_info=True)
                     return Response(
@@ -385,3 +393,6 @@ def resend_verification(request):
     except User.DoesNotExist:
         # For security, don't reveal that the email doesn't exist
         return Response({"detail": "Verification email sent if user exists."})
+
+
+
