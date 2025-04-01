@@ -1,0 +1,48 @@
+FROM python:3.11-slim
+
+ENV PYTHONFAULTHANDLER=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_NO_CACHE_DIR=off \
+    PIP_DISABLE_PIP_VERSION_CHECK=on \
+    PIP_DEFAULT_TIMEOUT=100 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_VERSION=1.7.1 \
+    POETRY_HOME="/opt/poetry" \
+    DJANGO_SETTINGS_MODULE="core.settings.prod"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    postgresql-client \
+    gcc \
+    python3-dev \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 - \
+    && ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files
+COPY . /app/
+
+# Install dependencies
+RUN poetry install --only main --no-interaction --no-ansi
+
+# Collect static files
+RUN python manage.py collectstatic --noinput
+
+# Create a non-root user
+RUN adduser --disabled-password --gecos "" appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+# Run Gunicorn
+CMD ["gunicorn", "--config", "gunicorn_config.py", "core.wsgi:application"] 

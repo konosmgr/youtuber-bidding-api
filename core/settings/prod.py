@@ -111,3 +111,47 @@ AWS_SES_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SES_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_SES_REGION_NAME = os.getenv("AWS_SES_REGION_NAME", "us-east-2")
 DEFAULT_FROM_EMAIL = "bettingonalaskasite@gmail.com"
+
+# Update Content Security Policy for Unsplash images
+CSP_IMG_SRC = (
+    "'self'",
+    "data:",
+    "https://*.s3.amazonaws.com",
+    "https://s3.konosmgr.com",
+)
+
+# Redis configuration for production
+REDIS_URL = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+
+# Production logging
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'WARNING',
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': True,
+        },
+        'auctions': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': True,
+        },
+    },
+}
