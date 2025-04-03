@@ -39,3 +39,4 @@ urlpatterns = [
     path("admin/mark_winners/", admin.mark_winners, name="mark_winners"),
     path("admin/contact_winners/", admin.contact_winners, name="contact_winners"),
 ]
+ 

@@ -12,6 +12,7 @@ DEBUG = False
 
 ALLOWED_HOSTS = ["www.konosmgr.com", "konosmgr.com", "api.konosmgr.com"]
 
+
 # Production-specific apps
 INSTALLED_APPS += []
 
@@ -78,7 +79,7 @@ CSRF_COOKIE_NAME = "csrftoken"
 CSRF_COOKIE_SECURE = True
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_DOMAIN = None
+CSRF_COOKIE_DOMAIN = ".konosmgr.com"
 CSRF_USE_SESSIONS = False
 CSRF_TRUSTED_ORIGINS = [
     "https://www.konosmgr.com",
@@ -91,6 +92,7 @@ SESSION_COOKIE_NAME = "sessionid"
 SESSION_COOKIE_SECURE = True
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_DOMAIN = ".konosmgr.com"
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = 1209600
 
@@ -117,6 +119,7 @@ DEFAULT_FROM_EMAIL = "bettingonalaskasite@gmail.com"
 CSP_IMG_SRC = (
     "'self'",
     "data:",
+    "blob:",
     "https://*.s3.amazonaws.com",
     "https://s3.konosmgr.com",
 )
@@ -128,6 +131,8 @@ CSP_CONNECT_SRC = (
     "https://*.s3.amazonaws.com",
     "https://s3.konosmgr.com",
     "https://api.konosmgr.com",
+    "blob:",
+    "data:",
 )
 
 # Redis configuration for production
@@ -164,4 +169,22 @@ LOGGING = {
             'propagate': True,
         },
     },
+}
+
+# Override cache settings to fix Redis parser issue
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.environ.get("REDIS_URL", "redis://redis:6379/1"),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # Remove or replace the parser class
+            # "PARSER_CLASS": "redis.connection.HiredisParser",  # This line causes the error
+            "SOCKET_CONNECT_TIMEOUT": 5,
+            "SOCKET_TIMEOUT": 5,
+            "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
+            "IGNORE_EXCEPTIONS": True,
+        },
+        "KEY_PREFIX": "youtuber_bidding_prod",
+    }
 }
