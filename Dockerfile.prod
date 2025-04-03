@@ -32,10 +32,10 @@ WORKDIR /app
 COPY . /app/
 
 # Install dependencies
-RUN poetry install --only main --no-interaction --no-ansi
+RUN poetry install --only main --no-interaction --no-ansi --no-root
 
 # Collect static files
-RUN python manage.py collectstatic --noinput
+RUN DJANGO_ENVIRONMENT=prod DJANGO_SETTINGS_MODULE=core.settings.prod python manage.py collectstatic --noinput
 
 # Create a non-root user
 RUN adduser --disabled-password --gecos "" appuser && \

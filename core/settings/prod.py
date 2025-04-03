@@ -10,7 +10,7 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ["www.konosmgr.com", "konosmgr.com"]
+ALLOWED_HOSTS = ["www.konosmgr.com", "konosmgr.com", "api.konosmgr.com"]
 
 # Production-specific apps
 INSTALLED_APPS += []
@@ -83,6 +83,7 @@ CSRF_USE_SESSIONS = False
 CSRF_TRUSTED_ORIGINS = [
     "https://www.konosmgr.com",
     "https://konosmgr.com",
+    "https://api.konosmgr.com",
 ]
 
 # Session settings for production
@@ -118,6 +119,15 @@ CSP_IMG_SRC = (
     "data:",
     "https://*.s3.amazonaws.com",
     "https://s3.konosmgr.com",
+)
+
+# Update Content Security Policy for API
+CSP_CONNECT_SRC = (
+    "'self'",
+    "https://accounts.google.com",
+    "https://*.s3.amazonaws.com",
+    "https://s3.konosmgr.com",
+    "https://api.konosmgr.com",
 )
 
 # Redis configuration for production
