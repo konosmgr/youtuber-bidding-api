@@ -34,7 +34,7 @@ LOCAL_APPS = [
     "auctions",
 ]
 
-INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
+INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS + ['csp']
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -72,6 +72,17 @@ TEMPLATES = [
         },
     },
 ]
+
+# Security Headers
+# X-Content-Type-Options
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# X-Frame-Options - prevents clickjacking
+X_FRAME_OPTIONS = 'DENY'
+
+# HSTS - forces HTTPS
+SECURE_HSTS_SECONDS = 86400  # Start with 1 day
+SECURE_HSTS_INCLUDE_SUBDOMAINS = False  # Start without subdomains
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
